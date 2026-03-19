@@ -6,11 +6,7 @@
 
 示例：
 python dataset/sample_step_rl_jsonl.py \
-  --input /path/to/step_rl_train.jsonl \
-  --output /path/to/step_rl_train_sampled.jsonl \
-  --num 2000 \
-  --seed 42
-"""
+
 
 import argparse
 import json

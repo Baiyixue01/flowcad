@@ -21,11 +21,11 @@ PRE_CODE_DIRS = [
     "/home/baiyixue/project/op-cad/data/pre_code"
 ]
 GT_CODE_DIR  = "/home/baiyixue/project/op-cad/data/gt_code"
-OUT_DIR      = "/home/baiyixue/project/op-cad/others/train_data/sft_cop_full"
+OUT_DIR      = "/home/baiyixue/project/flowcad/dataset/RL_stageI_step_level"
 
 # ========== 工具函数 ==========
 def build_incremental_cq_prompt(
-    previous_code: str,
+    previous_code: str,   
     operation_instruction: str,
     op_kind: str = None,
 ) -> str:
