@@ -2,13 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-将 split_result.json + prompt.csv + {pre_code, gt_code} 组合为 Alpaca 格式 JSONL
-Alpaca 单条样例:
-{
-  "instruction": "<prompt_text>",
-  "input": "```python\n<pre_code>\n```",
-  "output": "```python\n<gt_code>\n```"
-}
+将 split_result.json + prompt.csv + {pre_code, gt_code} 组合为 Step-level RL 训练数据 JSONL。
 """
 
 import os
@@ -255,10 +249,16 @@ def build_split(items, prompt_map, op_map, out_path: Path, missing_rows: list):
                 op_kind=op_kind,
             )
 
-            rec = { 
-                "instruction": "Generate incremental CadQuery code strictly following the given prompt. Output ONLY the new code snippet.",
-                "input": full_prompt,          # 这里放完整 prompt（含 Context / Rules / Output format）
-                "output": gt_code.strip(),   # 不要 wrap_code_py
+            # Step-level RL/GRPO 样本：
+            # - prompt: 供模型生成 completion
+            # - group_index/op: 供 reward_fn 通过 kwargs 读取
+            rec = {
+                "prompt": full_prompt,
+                "group_index": sid,
+                "op": str(op_kind).strip().lower() if op_kind is not None else "",
+                "prompt_text": op_instr,
+                "previous_code": pre_code,
+                "gt_code": gt_code.strip(),  # 可选保留，便于离线分析/回放
             }
             fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n_ok += 1
@@ -271,7 +271,7 @@ def build_split(items, prompt_map, op_map, out_path: Path, missing_rows: list):
 def main():
 
     global PRE_CODE_DIRS, GT_CODE_DIR
-    parser = argparse.ArgumentParser(description="Build Alpaca JSONL from split + prompts + codes")
+    parser = argparse.ArgumentParser(description="Build Step-level RL JSONL from split + prompts + codes")
     parser.add_argument("--split_json", default=SPLIT_JSON)
     parser.add_argument("--prompt_csv", default=PROMPT_CSV)
     parser.add_argument("--pre_code_dirs", nargs="*", default=PRE_CODE_DIRS)
@@ -298,8 +298,11 @@ def main():
     # 生成
     missing_rows = []  # [sample_id, reason, pre_path, gt_path]
 
-    n_train = build_split(train_ids, prompt_map, op_map, out_dir / "alpaca_train_std.jsonl", missing_rows)
-    n_val   = build_split(val_ids,   prompt_map, op_map, out_dir / "alpaca_val.jsonl",   missing_rows)
+    train_path = out_dir / "step_rl_train.jsonl"
+    val_path = out_dir / "step_rl_val.jsonl"
+
+    n_train = build_split(train_ids, prompt_map, op_map, train_path, missing_rows)
+    n_val   = build_split(val_ids,   prompt_map, op_map, val_path,   missing_rows)
 
     # 写缺失报表
     rep_path = out_dir / "missing_report.csv"
@@ -308,8 +311,8 @@ def main():
         w.writerow(["sample_id", "reason", "pre_code_path", "gt_code_path"])
         w.writerows(missing_rows)
 
-    print(f"[OK] Train written: {n_train} -> {out_dir/'op_cad_cop_train.jsonl'}")
-    print(f"[OK] Val written:   {n_val} -> {out_dir/'op_cad_cop_val.jsonl'}")
+    print(f"[OK] Train written: {n_train} -> {train_path}")
+    print(f"[OK] Val written:   {n_val} -> {val_path}")
     print(f"[INFO] Missing/Errors: {len(missing_rows)} -> {rep_path}")
 
 if __name__ == "__main__":
