@@ -30,10 +30,12 @@ python train_stage1_rl.py \
 
 import argparse
 import os
+from typing import Any
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from trl import GRPOConfig, GRPOTrainer
+import requests
 
 import evaluation.pipeline as pl
 import evaluation.reward_fun as rf
@@ -57,6 +59,23 @@ def parse_args():
     parser.add_argument("--gt-edges-dir", required=True, help="GT 边标签目录")
     parser.add_argument("--tmp-dir", required=True, help="reward 临时目录")
     parser.add_argument("--mode", choices=["std", "cop"], default="std", help="与 reward 读取 pre_code 的模式")
+    parser.add_argument(
+        "--reward-server-url",
+        default="",
+        help="可选：远程 reward 服务地址（例如 http://127.0.0.1:8005）。设置后训练会通过 HTTP 获取 reward。",
+    )
+    parser.add_argument(
+        "--reward-timeout",
+        type=float,
+        default=120.0,
+        help="远程 reward 请求超时（秒）。",
+    )
+    parser.add_argument(
+        "--reward-max-retries",
+        type=int,
+        default=2,
+        help="远程 reward 请求最大重试次数（失败后返回惩罚分）。",
+    )
 
     # 训练超参
     parser.add_argument("--seed", type=int, default=42)
@@ -109,6 +128,56 @@ def configure_reward_env(args):
     os.makedirs(args.tmp_dir, exist_ok=True)
 
 
+def build_remote_reward_fn(base_url: str, timeout: float, max_retries: int):
+    """
+    返回一个与 TRL/GRPO 接口兼容的 reward 函数：
+    - 输入: prompts/completions/kwargs(来自 dataset 列)
+    - 输出: list[float]
+    """
+
+    url = f"{base_url.rstrip('/')}/reward"
+    session = requests.Session()
+
+    def _remote_reward_fn(prompts, completions, **kwargs):
+        batch_size = len(completions)
+        metas: list[dict[str, Any]] = []
+
+        for i in range(batch_size):
+            meta_i = {}
+            for key, val in kwargs.items():
+                if isinstance(val, (list, tuple)):
+                    if i < len(val):
+                        meta_i[key] = val[i]
+                else:
+                    meta_i[key] = val
+            metas.append(meta_i)
+
+        payload = {
+            "prompts": list(prompts),
+            "completions": list(completions),
+            "metas": metas,
+        }
+
+        last_err = None
+        for _ in range(max(1, max_retries + 1)):
+            try:
+                resp = session.post(url, json=payload, timeout=timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                rewards = data.get("rewards", [])
+                ok = data.get("ok", True)
+                if ok and isinstance(rewards, list) and len(rewards) == batch_size:
+                    return [float(r) for r in rewards]
+                last_err = RuntimeError(f"Invalid reward response: {data}")
+            except Exception as e:
+                last_err = e
+
+        print(f"[reward-server] request failed, fallback to -2.0: {last_err}")
+        return [-2.0] * batch_size
+
+    return _remote_reward_fn
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -148,10 +217,18 @@ def main():
         report_to="none",
     )
 
+    reward_func = rf.reward_fn
+    if args.reward_server_url:
+        reward_func = build_remote_reward_fn(
+            base_url=args.reward_server_url,
+            timeout=args.reward_timeout,
+            max_retries=args.reward_max_retries,
+        )
+
     trainer = GRPOTrainer(
         model=model,
         args=grpo_args,
-        reward_funcs=rf.reward_fn,
+        reward_funcs=reward_func,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         processing_class=tokenizer,
@@ -164,4 +241,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
