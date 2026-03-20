@@ -27,10 +27,6 @@ python train_stage1_rl.py \
   --tmp-dir /path/to/tmp_reward
 """
 
-import reward.pipeline as pl
-import reward.reward_fun as rf
-
-
 import argparse
 import os
 from typing import Any
@@ -40,6 +36,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from trl import GRPOConfig, GRPOTrainer
 import requests
 
+import evaluation.pipeline as pl
+import evaluation.reward_fun as rf
 
 
 def parse_args():
