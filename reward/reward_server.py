@@ -1,4 +1,5 @@
 from typing import Any
+import importlib
 from fastapi import FastAPI
 from pydantic import BaseModel
 import traceback
@@ -24,11 +25,51 @@ class RewardResponse(BaseModel):
 # 不要放到每次请求里初始化
 class HeavyRewardEngine:
     def __init__(self):
-        # 在这里加载重依赖
-        # 例如：
-        # self.evaluator = CADMetricEvaluator(...)
-        # self.sim_env = SomeEnv(...)
-        print("HeavyRewardEngine initialized.")
+        self.remote_reward_fn = None
+        for module_name in ("reward.reward_fun", "reward_fun"):
+            try:
+                module = importlib.import_module(module_name)
+                self.remote_reward_fn = getattr(module, "reward_fn", None)
+                if self.remote_reward_fn is not None:
+                    print(f"HeavyRewardEngine initialized with {module_name}.reward_fn")
+                    return
+            except Exception:
+                traceback.print_exc()
+
+        print("HeavyRewardEngine initialized with fallback demo scorer.")
+
+    def score_batch(
+        self,
+        completions: list[str],
+        prompts: list[str] | None = None,
+        metas: list[dict[str, Any]] | None = None,
+    ) -> list[float]:
+        if self.remote_reward_fn is not None:
+            kwargs: dict[str, list[Any]] = {}
+            if metas:
+                for meta in metas:
+                    for key, value in (meta or {}).items():
+                        kwargs.setdefault(key, []).append(value)
+
+                # 保证每个 key 与 batch 对齐
+                batch_size = len(completions)
+                for key, val_list in kwargs.items():
+                    if len(val_list) < batch_size:
+                        kwargs[key] = val_list + [None] * (batch_size - len(val_list))
+
+            scores = self.remote_reward_fn(
+                prompts=prompts or ["" for _ in completions],
+                completions=completions,
+                **kwargs,
+            )
+            return [float(x) for x in scores]
+
+        scores = []
+        for completion, prompt, meta in zip(completions, prompts or [], metas or []):
+            scores.append(self.score_one(completion=completion, prompt=prompt, meta=meta))
+        if not scores:
+            scores = [self.score_one(completion=c) for c in completions]
+        return [float(x) for x in scores]
 
     def score_one(self, completion: str, prompt: str | None = None, meta: dict | None = None) -> float:
         """
@@ -78,8 +119,6 @@ def health():
 @app.post("/reward", response_model=RewardResponse)
 def compute_reward(req: RewardRequest):
     try:
-        rewards = []
-
         prompts = req.prompts or [None] * len(req.completions)
         metas = req.metas or [None] * len(req.completions)
 
@@ -90,9 +129,11 @@ def compute_reward(req: RewardRequest):
                 error="Length mismatch among completions/prompts/metas",
             )
 
-        for completion, prompt, meta in zip(req.completions, prompts, metas):
-            score = engine.score_one(completion=completion, prompt=prompt, meta=meta)
-            rewards.append(float(score))
+        rewards = engine.score_batch(
+            completions=req.completions,
+            prompts=prompts,
+            metas=metas,
+        )
 
         return RewardResponse(rewards=rewards, ok=True)
 
