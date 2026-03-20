@@ -45,7 +45,6 @@ def build_arg_parser():
     # 代码/GT 目录
     p.add_argument("--pre-code-dir", default="./data/pre_code", help="非COP：前序代码目录")
     p.add_argument("--cop-pre-code-dir",default="./data/pre_code_cop", help="COP：前序代码目录（增量链）")
-    p.add_argument("--gt-image-dir", required=True, help="GT 渲染图根目录")
     p.add_argument("--gt-single-step-dir", required=True, help="单步GT STEP根目录")
     p.add_argument("--op-orient-dir", required=True, help="整体形状（累计到 stepN）的 STEP 根目录")
     p.add_argument("--dedup-csv", required=True, help="去重映射 CSV（group_index, duplicate_of_group_index）")
@@ -55,7 +54,6 @@ def build_arg_parser():
     p.add_argument("--k", type=int, default=2, help="pass@k 的 k")
     p.add_argument("--pass-metric", choices=["cosine","iou"], default="cosine", help="主评价指标（若使用图像相似）")
     p.add_argument("--cos-threshold", type=float, default=0.90, help="cosine 阈值（仅在 cosine 模式下有效）")
-    p.add_argument("--image-size", type=int, default=518, help="DINO 输入尺寸")
     p.add_argument("--fivecrop", action="store_true", help="若你在 render_to_png 做了多视角，可关闭这里；否则可开")
 
     # 多进程
@@ -108,9 +106,9 @@ def build_arg_parser():
     return p
 
 def apply_args(args):
-    global PROMPTS_CSV, OUT_DIR, PRE_CODE_DIR, COP_PRE_CODE_DIR, GT_IMAGE_DIR, DEDUP_CSV, GT_EDGES_DIR
+    global PROMPTS_CSV, OUT_DIR, PRE_CODE_DIR, COP_PRE_CODE_DIR, DEDUP_CSV, GT_EDGES_DIR
     global GT_SINGLE_STEP_DIR, OP_ORIENT_DIR, K, DEVICE, PASS_METRIC, COS_THRESHOLD
-    global IMAGE_SIZE, FIVECROP, COP, SAVE_STEP, SAVE_RENDER, TMP_DIR, RESUME
+    global FIVECROP, COP, SAVE_STEP, SAVE_RENDER, TMP_DIR, RESUME
     global SEED, DINO_MODEL_ID, NPROC, WRITE_EVERY
     global WRITE_SUMMARY
     global THINKING
@@ -154,7 +152,6 @@ def apply_args(args):
 
     PRE_CODE_DIR = args.pre_code_dir
     COP_PRE_CODE_DIR = args.cop_pre_code_dir
-    GT_IMAGE_DIR = args.gt_image_dir
     DEDUP_CSV = args.dedup_csv
     GT_EDGES_DIR = args.gt_edges_dir
 
@@ -165,7 +162,6 @@ def apply_args(args):
     DEVICE = args.device
     PASS_METRIC = args.pass_metric
     COS_THRESHOLD = args.cos_threshold
-    IMAGE_SIZE = args.image_size
     FIVECROP = args.fivecrop
     COP = (args.mode == "cop")
 
@@ -565,11 +561,11 @@ def load_dedup_map() -> dict:
     return _dedup_map
 
 
-def resolve_gt_paths(pid: str, GT_IMAGE_DIR: str, GT_SINGLE_STEP_DIR: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def resolve_gt_paths(pid: str, GT_SINGLE_STEP_DIR: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
    
     assert OP_ORIENT_DIR, "OP_ORIENT_DIR not set. Call apply_args() first."
     """
-    返回: (gt_img_path, gt_single_step_path, gt_full_step_path)
+    返回: (gt_single_step_path, gt_full_step_path)
     - single: 原本的“该步的 isolated 形状”（GT_SINGLE_STEP_DIR）
     - full  : “累计到该步的整体形状”（OP_ORIENT_DIR），按多种目录约定自动匹配
     """
@@ -588,7 +584,6 @@ def resolve_gt_paths(pid: str, GT_IMAGE_DIR: str, GT_SINGLE_STEP_DIR: str) -> Tu
     # ========= 单步（原有逻辑） =========
     group_dir = os.path.join(GT_SINGLE_STEP_DIR, base_used.replace("/", os.sep))
     gi_path   = os.path.join(group_dir, "group_info.txt")
-    gt_img    = os.path.join(GT_IMAGE_DIR, f"{base_used}/{step}", "3D_isometric.png")
 
     m = _parse_group_info_txt(gi_path)
     expected = m.get(step, [])
@@ -597,10 +592,6 @@ def resolve_gt_paths(pid: str, GT_IMAGE_DIR: str, GT_SINGLE_STEP_DIR: str) -> Tu
     if gt_single and not os.path.exists(gt_single):
         print(f"[WARN] expected 3D.step not found: {gt_single}")
         gt_single = None
-    #TODO：需要根据去重后的 base_used 重定向 gt_img 路径
-    # if not os.path.exists(gt_img):
-    #     print(f"[WARN] gt image missing: {gt_img}")
-    #     gt_img = None
     # ========= 整体（新增逻辑） =========
     op_orient_group_dir = os.path.join(OP_ORIENT_DIR, base_used.replace("/", os.sep))
     gt_full = _pick_full_step_path(op_orient_group_dir, expected)
@@ -609,7 +600,7 @@ def resolve_gt_paths(pid: str, GT_IMAGE_DIR: str, GT_SINGLE_STEP_DIR: str) -> Tu
         # 兜底打印方便排查
         print(f"[WARN] full-step not found under {op_orient_group_dir} for indices={expected}")
 
-    return gt_img, gt_single, gt_full
+    return gt_single, gt_full
 
 #==================== DINO 初始化 =====================
 
@@ -959,7 +950,7 @@ def _safe_get_cd_hd(pred_step_path, gt_step_path, *, num_points=None, angles=Non
         return MetricsResult(None, None, None, ok=False, reason=reason)
 
 
-def process_one(r, K, COP, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR, GT_EDGES_DIR):
+def process_one(r, K, COP, GT_SINGLE_STEP_DIR, GT_EDGES_DIR):
     """处理单个样本，返回 (per_cand_rows, summary_rows, pid)。per_cand_rows 含 single/full 两类，用 kind 区分。"""
     pid = str(r["group_index"])
     import re, os
@@ -973,7 +964,7 @@ def process_one(r, K, COP, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR, GT_EDGES_DIR):
     step_num = int(m.group(1)) if m else -1
     first_step = (step_num == 0)
 
-    gt_img, gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR)
+    gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_SINGLE_STEP_DIR)
 
     # 前序代码
     prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)
@@ -1341,7 +1332,6 @@ def main_parallel():
     # ---- 带进度条 ----
     with mp.Pool(processes=NPROC,maxtasksperchild=10) as pool:
         worker = partial(process_one, K=K, COP=COP,
-                        GT_IMAGE_DIR=GT_IMAGE_DIR,
                         GT_SINGLE_STEP_DIR=GT_SINGLE_STEP_DIR,
                         GT_EDGES_DIR=GT_EDGES_DIR)
         with tqdm(total=n_total, desc="[Progress]", dynamic_ncols=True) as pbar:

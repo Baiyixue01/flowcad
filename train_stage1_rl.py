@@ -221,6 +221,9 @@ def main():
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
         report_to="none",
+        use_vllm=True,
+        vllm_mode="server",
+        vllm_server_base_url="http://127.0.0.1:8001",
     )
 
     # 配置 reward 函数

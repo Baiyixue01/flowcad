@@ -4,7 +4,7 @@ from reward.pipeline import resolve_gt_paths, _load_prev_code_from_dir, safe_exe
 from reward.pipeline import *
 from reward.utils.post_code_process import build_iso_code, build_integrated_code
 # 你已有的函数（来自现有脚本/模块）
-# - resolve_gt_paths(pid, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR) -> (gt_img, gt_single_step, gt_full_step)
+# - resolve_gt_paths(pid, GT_SINGLE_STEP_DIR) -> ( gt_single_step, gt_full_step)
 # - _load_prev_code_from_dir(pid, PRE_CODE_DIR or COP_PRE_CODE_DIR) -> prev_code str
 # - build_iso_code(prev_code, gen_code, iso_export_path, first_step) -> (single_code, info_shape)
 # - build_integrated_code(prev_code, gen_code, full_export_path, first_step) -> (integrated_code, final_lhs)
@@ -178,7 +178,7 @@ def reward_fn(prompts, completions, **kwargs):
         first_step = (step_num == 0)
 
         # GT 路径（你现有逻辑：single + full）
-        gt_img, gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR)
+        gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_SINGLE_STEP_DIR)
 
         # 前序代码（训练里通常你会把 prev_code 嵌进 prompt，但这里直接按你的目录读也行）
         prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)

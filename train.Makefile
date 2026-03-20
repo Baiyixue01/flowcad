@@ -23,9 +23,9 @@ GEN := 2
 # 默认目标（本地 reward）
 # =========================
 train:
-	CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+	CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-	torchrun --standalone --nproc_per_node=8 \
+	torchrun --standalone --nproc_per_node=6 \
 	$(SCRIPT) \
 	--train-jsonl $(TRAIN_JSONL) \
 	--eval-jsonl $(EVAL_JSONL) \
@@ -63,6 +63,12 @@ train-remote:
 	--gradient-accumulation-steps $(GRAD_ACC) \
 	--num-generations $(GEN) \
 	--bf16
+
+vllm-serve:
+		CUDA_VISIBLE_DEVICES=0,1 trl vllm-serve \
+		--model $(MODEL) \
+		--tensor-parallel-size 2 \
+		--port 8001
 
 # =========================
 # Debug（小步跑）
