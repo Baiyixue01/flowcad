@@ -26,6 +26,8 @@ python train_stage1_rl.py \
   --pre-code-dir /path/to/pre_code \
   --tmp-dir /path/to/tmp_reward
 """
+import reward.pipeline as pl
+import reward.reward_fun as rf
 
 import argparse
 import os
@@ -36,8 +38,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from trl import GRPOConfig, GRPOTrainer
 import requests
 
-import evaluation.pipeline as pl
-import evaluation.reward_fun as rf
+
 
 
 def parse_args():
@@ -85,7 +86,7 @@ def parse_args():
     parser.add_argument("--per-device-eval-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--num-generations", type=int, default=4)
-    parser.add_argument("--max-prompt-length", type=int, default=2048)
+    parser.add_argument("--max-prompt-length", type=int, default=512)
     parser.add_argument("--max-completion-length", type=int, default=512)
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--save-steps", type=int, default=200)
@@ -178,12 +179,12 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     configure_reward_env(args)
-
+    # 加载数据集
     train_ds = load_dataset("json", data_files=args.train_jsonl, split="train")
     eval_ds = None
     if args.eval_jsonl:
         eval_ds = load_dataset("json", data_files=args.eval_jsonl, split="train")
-
+    # 加载模型和 tokenizer
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         trust_remote_code=True,
@@ -192,6 +193,15 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, trust_remote_code=True)
+
+    model.config.pad_token_id = tokenizer.pad_token_id
+    if hasattr(model, "generation_config") and model.generation_config is not None:
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
+        model.generation_config.bos_token_id = tokenizer.bos_token_id
+
+    # 配置 GRPO 训练参数
     grpo_args = GRPOConfig(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -213,6 +223,7 @@ def main():
         report_to="none",
     )
 
+    # 配置 reward 函数
     reward_func = rf.reward_fn
     if args.reward_server_url:
         reward_func = build_remote_reward_fn(
@@ -221,6 +232,7 @@ def main():
             max_retries=args.reward_max_retries,
         )
 
+    # 初始化 GRPOTrainer
     trainer = GRPOTrainer(
         model=model,
         args=grpo_args,
@@ -230,6 +242,7 @@ def main():
         processing_class=tokenizer,
     )
 
+    # 开始训练
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)

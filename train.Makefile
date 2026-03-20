@@ -4,7 +4,7 @@ SCRIPT := /home/baiyixue/project/flowcad/train_stage1_rl.py
 TRAIN_JSONL := dataset/RL_stageI_step_level/step_rl_train_sampled.jsonl
 EVAL_JSONL := dataset/RL_stageI_step_level/step_rl_val_sampled.jsonl
 
-MODEL := /data/baiyixue/inference_model/Llama-3.1-8B_ar_coop_sketch_sft_full
+MODEL := /data/baiyixue/inference_model/Qwen2.5-Coder-0.5B-Instruct
 OUTPUT_DIR := /data/baiyixue/inference_model/stage1_rl
 
 PRE_CODE_DIR := data/pre_code
@@ -16,14 +16,17 @@ TMP_DIR := /home/baiyixue/project/flowcad/tmp_reward
 # 训练参数
 LR := 1e-6
 BATCH := 1
-GRAD_ACC := 8
-GEN := 4
+GRAD_ACC := 2
+GEN := 2
 
 # =========================
 # 默认目标（本地 reward）
 # =========================
 train:
-	$(PYTHON) $(SCRIPT) \
+	CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	torchrun --standalone --nproc_per_node=8 \
+	$(SCRIPT) \
 	--train-jsonl $(TRAIN_JSONL) \
 	--eval-jsonl $(EVAL_JSONL) \
 	--model-name $(MODEL) \
@@ -37,7 +40,8 @@ train:
 	--per-device-train-batch-size $(BATCH) \
 	--gradient-accumulation-steps $(GRAD_ACC) \
 	--num-generations $(GEN) \
-	--bf16
+	--fp16 \
+	--gradient-checkpointing
 
 # =========================
 # 使用远程 reward server
