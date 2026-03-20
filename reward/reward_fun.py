@@ -1,8 +1,8 @@
 import os, re, math, tempfile, json
 import numpy as np
-from pipeline import resolve_gt_paths, _load_prev_code_from_dir, safe_exec_from_path, _safe_get_cd_hd, _eval_pred_edges_from_blocks, _load_gt_edges_for_pid, _compute_cf_iou_metrics, geometry_valid
-from pipeline import *
-from utils.post_code_process import build_iso_code, build_integrated_code
+from reward.pipeline import resolve_gt_paths, _load_prev_code_from_dir, safe_exec_from_path, _safe_get_cd_hd, _eval_pred_edges_from_blocks, _load_gt_edges_for_pid, _compute_cf_iou_metrics, geometry_valid
+from reward.pipeline import *
+from reward.utils.post_code_process import build_iso_code, build_integrated_code
 # 你已有的函数（来自现有脚本/模块）
 # - resolve_gt_paths(pid, GT_IMAGE_DIR, GT_SINGLE_STEP_DIR) -> (gt_img, gt_single_step, gt_full_step)
 # - _load_prev_code_from_dir(pid, PRE_CODE_DIR or COP_PRE_CODE_DIR) -> prev_code str

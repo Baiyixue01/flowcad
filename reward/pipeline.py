@@ -5,7 +5,7 @@ import os, traceback, json, time
 import pandas as pd
 import numpy as np
 import cadquery as cq
-from model_call import call_model as cm
+from reward.model_call import call_model as cm
 import os, re, ast
 from typing import Optional, Tuple, List
 # Linux 下建议显式设置以避免 OpenBLAS 抢核

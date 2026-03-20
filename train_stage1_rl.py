@@ -20,13 +20,16 @@ python train_stage1_rl.py \
   --eval-jsonl /path/to/step_rl_val.jsonl \
   --model-name Qwen/Qwen2.5-Coder-7B-Instruct \
   --output-dir /path/to/outputs/stage1_rl \
-  --gt-image-dir /path/to/gt_image \
   --gt-single-step-dir /path/to/gt_single_step \
   --op-orient-dir /path/to/op_orientated_step \
   --gt-edges-dir /path/to/gt_edges_json \
   --pre-code-dir /path/to/pre_code \
   --tmp-dir /path/to/tmp_reward
 """
+
+import reward.pipeline as pl
+import reward.reward_fun as rf
+
 
 import argparse
 import os
@@ -37,8 +40,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from trl import GRPOConfig, GRPOTrainer
 import requests
 
-import evaluation.pipeline as pl
-import evaluation.reward_fun as rf
 
 
 def parse_args():
@@ -53,7 +54,6 @@ def parse_args():
     # reward 相关路径
     parser.add_argument("--pre-code-dir", required=True, help="前序代码目录（std 模式）")
     parser.add_argument("--cop-pre-code-dir", default="", help="前序代码目录（cop 模式，可选）")
-    parser.add_argument("--gt-image-dir", required=True, help="GT 图像目录")
     parser.add_argument("--gt-single-step-dir", required=True, help="GT 单步 STEP 目录")
     parser.add_argument("--op-orient-dir", required=True, help="GT 累计形状（full）STEP 目录")
     parser.add_argument("--gt-edges-dir", required=True, help="GT 边标签目录")
@@ -109,7 +109,6 @@ def configure_reward_env(args):
     # pipeline 内函数（如 resolve_gt_paths）依赖这些全局变量
     pl.PRE_CODE_DIR = args.pre_code_dir
     pl.COP_PRE_CODE_DIR = cop_pre
-    pl.GT_IMAGE_DIR = args.gt_image_dir
     pl.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
     pl.OP_ORIENT_DIR = args.op_orient_dir
     pl.GT_EDGES_DIR = args.gt_edges_dir
@@ -119,7 +118,6 @@ def configure_reward_env(args):
     # reward_fun 内直接读取这些同名全局变量
     rf.PRE_CODE_DIR = args.pre_code_dir
     rf.COP_PRE_CODE_DIR = cop_pre
-    rf.GT_IMAGE_DIR = args.gt_image_dir
     rf.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
     rf.GT_EDGES_DIR = args.gt_edges_dir
     rf.TMP_DIR = args.tmp_dir

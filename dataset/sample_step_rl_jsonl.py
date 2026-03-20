@@ -6,9 +6,9 @@
 
 示例：
 python dataset/sample_step_rl_jsonl.py \
-  --input dataset/RL_stageI_step_level/step_rl_train.jsonl \
-  --output dataset/RL_stageI_step_level/step_rl_train_sampled.jsonl \
-  --num 2000 \
+  --input dataset/RL_stageI_step_level/step_rl_val.jsonl \
+  --output dataset/RL_stageI_step_level/step_rl_val_sampled.jsonl \
+  --num 500 \
   --seed 42
 """
 
