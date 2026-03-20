@@ -1,20 +1,16 @@
 PYTHON := /data/baiyixue/miniforge3/envs/trl/bin/python
 SCRIPT := /home/baiyixue/project/flowcad/train_stage1_rl.py
 
-# 用脚本默认参数
-run:
-	$(PYTHON) $(SCRIPT)
-
 TRAIN_JSONL := dataset/RL_stageI_step_level/step_rl_train_sampled.jsonl
 EVAL_JSONL := dataset/RL_stageI_step_level/step_rl_val_sampled.jsonl
 
 MODEL := /data/baiyixue/inference_model/Llama-3.1-8B_ar_coop_sketch_sft_full
 OUTPUT_DIR := /data/baiyixue/inference_model/stage1_rl
 
-PRE_CODE_DIR := /home/baiyixue/project/op-cad/data/pre_code_scale_short
+PRE_CODE_DIR := data/pre_code
 GT_SINGLE_STEP_DIR := /data/baiyixue/CAD/step_files
 OP_ORIENT_DIR := /data/baiyixue/CAD/op_oriented_step
-GT_EDGES_DIR := /home/baiyixue/project/op-cad/data/gt_edges_json_scale
+GT_EDGES_DIR := data/gt_edges_json
 TMP_DIR := /home/baiyixue/project/flowcad/tmp_reward
 
 # 训练参数
