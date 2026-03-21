@@ -97,6 +97,11 @@ def parse_args():
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--fp16", action="store_true", default=False)
     parser.add_argument("--gradient-checkpointing", action="store_true", default=False)
+    parser.add_argument(
+        "--deepspeed-config",
+        default="",
+        help="DeepSpeed 配置文件路径（JSON，可选）。设置后将传给 GRPOConfig.deepspeed。",
+    )
 
     return parser.parse_args()
 
@@ -198,9 +203,6 @@ def main():
     #     trust_remote_code=True,
     # )
 
-    # ⚠️ RL 必须关 cache
-    model.config.use_cache = False
-
     # 🔥 LoRA 配置
     lora_config = LoraConfig(
         r=8,
@@ -223,6 +225,8 @@ def main():
     #     model.generation_config.eos_token_id = tokenizer.eos_token_id
     #     model.generation_config.bos_token_id = tokenizer.bos_token_id
 
+    deepspeed_config = args.deepspeed_config if args.deepspeed_config else None
+
     # 配置 GRPO 训练参数
     grpo_args = GRPOConfig(
         output_dir=args.output_dir,
@@ -242,6 +246,7 @@ def main():
         bf16=args.bf16,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
+        deepspeed=deepspeed_config,
         report_to="none",
         # use_vllm=True,
         # vllm_mode="server",
