@@ -1,284 +1,349 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+import os, re, math, tempfile, json
+import numpy as np
+from reward.pipeline import resolve_gt_paths, _load_prev_code_from_dir, safe_exec_from_path, _safe_get_cd_hd, _eval_pred_edges_from_blocks, _load_gt_edges_for_pid, _compute_cf_iou_metrics, geometry_valid
+from reward.pipeline import *
+from reward.utils.post_code_process import build_iso_code, build_integrated_code
+# 你已有的函数（来自现有脚本/模块）
+# - resolve_gt_paths(pid, GT_SINGLE_STEP_DIR) -> ( gt_single_step, gt_full_step)
+# - _load_prev_code_from_dir(pid, PRE_CODE_DIR or COP_PRE_CODE_DIR) -> prev_code str
+# - build_iso_code(prev_code, gen_code, iso_export_path, first_step) -> (single_code, info_shape)
+# - build_integrated_code(prev_code, gen_code, full_export_path, first_step) -> (integrated_code, final_lhs)
+# - safe_exec_from_path(py_path) -> (ok, loc, err)
+# - _safe_get_cd_hd(pred_step_path, gt_step_path, angles=None) -> MetricsResult(cd, hd, best_euler_angle, ok, reason)
+# - _eval_pred_edges_from_blocks(prev_code, gen_code) -> (pred_f, pred_c, parse_err)
+# - _load_gt_edges_for_pid(GT_EDGES_DIR, pid) -> (gt_f, gt_c)
+# - _compute_cf_iou_metrics(pred_f, pred_c, gt_f, gt_c) -> dict with cf_iou etc.
+# - geometry_valid(shape_obj) -> (ok, info)
 
-"""
-Stage-1 Step-level RL 训练脚本（基于 TRL GRPOTrainer）。
+_PID_RE = re.compile(r"^\s*#\s*PID\s*:\s*(.+?)\s*$", re.IGNORECASE | re.M)
+_OP_RE  = re.compile(r"^\s*#\s*OP\s*:\s*(.+?)\s*$",  re.IGNORECASE | re.M)
 
-数据输入（JSONL）建议字段：
-- prompt
-- group_index
-- op
+def _extract_pid_op(prompt: str):
+    m1 = _PID_RE.search(prompt or "")
+    m2 = _OP_RE.search(prompt or "")
+    pid = (m1.group(1).strip() if m1 else None)
+    op  = (m2.group(1).strip().lower() if m2 else "")
+    return pid, op
 
-可选字段：
-- prompt_text
-- previous_code
-- gt_code
+def _to_list(x):
+    """把 kwargs 里的 batch 字段尽量转成 list；标量返回单元素 list。"""
+    if x is None:
+        return None
+    if isinstance(x, list):
+        return x
+    if isinstance(x, tuple):
+        return list(x)
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if hasattr(x, "tolist"):
+        try:
+            y = x.tolist()
+            return y if isinstance(y, list) else [y]
+        except Exception:
+            pass
+    return [x]
 
-示例：
-python train_stage1_rl.py \
-  --train-jsonl /path/to/step_rl_train.jsonl \
-  --eval-jsonl /path/to/step_rl_val.jsonl \
-  --model-name Qwen/Qwen2.5-Coder-7B-Instruct \
-  --output-dir /path/to/outputs/stage1_rl \
-  --gt-single-step-dir /path/to/gt_single_step \
-  --op-orient-dir /path/to/op_orientated_step \
-  --gt-edges-dir /path/to/gt_edges_json \
-  --pre-code-dir /path/to/pre_code \
-  --tmp-dir /path/to/tmp_reward
-"""
+def _get_by_idx(batch_field, idx):
+    if batch_field is None:
+        return None
+    if idx < len(batch_field):
+        return batch_field[idx]
+    return None
 
-import reward.pipeline as pl
-import reward.reward_fun as rf
+def _extract_code_block(text: str) -> str:
+    """允许 ```python ...``` 或者纯代码。"""
+    if not text:
+        return ""
+    m = re.search(r"```(?:python)?\s*(.*?)```", text, flags=re.S | re.I)
+    if m:
+        return (m.group(1) or "").strip()
+    return text.strip()
 
-import argparse
-import os
-from typing import Any
-
-from datasets import load_dataset
-from transformers import set_seed
-from peft import LoraConfig, TaskType
-from trl import GRPOConfig, GRPOTrainer
-import requests
-
-
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train Stage-1 Step-level RL model with GRPO.")
-
-    # 数据/模型
-    parser.add_argument("--train-jsonl", required=True, help="step_rl_train.jsonl 路径")
-    parser.add_argument("--eval-jsonl", default=None, help="step_rl_val.jsonl 路径（可选）")
-    parser.add_argument("--model-name", required=True, help="基础模型或SFT模型路径")
-    parser.add_argument("--output-dir", required=True, help="训练输出目录")
-
-    # reward 相关路径
-    parser.add_argument("--pre-code-dir", required=True, help="前序代码目录（std 模式）")
-    parser.add_argument("--cop-pre-code-dir", default="", help="前序代码目录（cop 模式，可选）")
-    parser.add_argument("--gt-single-step-dir", required=True, help="GT 单步 STEP 目录")
-    parser.add_argument("--op-orient-dir", required=True, help="GT 累计形状（full）STEP 目录")
-    parser.add_argument("--gt-edges-dir", required=True, help="GT 边标签目录")
-    parser.add_argument("--dedup-csv", required=True, help="去重映射 CSV（必填）")
-    parser.add_argument("--tmp-dir", required=True, help="reward 临时目录")
-    parser.add_argument("--mode", choices=["std", "cop"], default="std", help="与 reward 读取 pre_code 的模式")
-    parser.add_argument(
-        "--reward-server-url",
-        default="",
-        help="可选：远程 reward 服务地址（例如 http://127.0.0.1:8005）。设置后训练会通过 HTTP 获取 reward。",
-    )
-    parser.add_argument(
-        "--reward-timeout",
-        type=float,
-        default=120.0,
-        help="远程 reward 请求超时（秒）。",
-    )
-    parser.add_argument(
-        "--reward-max-retries",
-        type=int,
-        default=2,
-        help="远程 reward 请求最大重试次数（失败后返回惩罚分）。",
-    )
-
-    # 训练超参
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--learning-rate", type=float, default=1e-6)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
-    parser.add_argument("--num-train-epochs", type=float, default=1.0)
-    parser.add_argument("--max-steps", type=int, default=-1)
-    parser.add_argument("--per-device-train-batch-size", type=int, default=1)
-    parser.add_argument("--per-device-eval-batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--num-generations", type=int, default=4)
-    parser.add_argument("--max-prompt-length", type=int, default=512)
-    parser.add_argument("--max-completion-length", type=int, default=512)
-    parser.add_argument("--logging-steps", type=int, default=10)
-    parser.add_argument("--save-steps", type=int, default=200)
-    parser.add_argument("--eval-steps", type=int, default=200)
-    parser.add_argument("--bf16", action="store_true", default=False)
-    parser.add_argument("--fp16", action="store_true", default=False)
-    parser.add_argument("--gradient-checkpointing", action="store_true", default=False)
-    # parser.add_argument(
-    #     "--deepspeed-config",
-    #     default="",
-    #     help="DeepSpeed 配置文件路径（JSON，可选）。设置后将传给 GRPOConfig.deepspeed。",
-    # )
-
-    return parser.parse_args()
-
-
-def configure_reward_env(args):
+def _format_ok(gen_code: str, op_kind: str = "") -> bool:
     """
-    将路径配置注入 pipeline/reward_fun，确保 reward_fn 可用。
+    对齐 build_incremental_cq_prompt 的输出格式要求：
+    - 非 chamfer/fillet: 必须有且仅有顺序正确的 #shape -> #bool，两段均非空，且 #bool 内有 result 赋值
+    - chamfer/fillet: 必须包含 wp 重置、edge 选择、fillet/chamfer 调用、result 赋值
     """
-    cop_pre = args.cop_pre_code_dir if args.cop_pre_code_dir else args.pre_code_dir
-    cop_flag = args.mode == "cop"
+    if not gen_code or not gen_code.strip():
+        return False
 
-    # pipeline 内函数（如 resolve_gt_paths）依赖这些全局变量
-    pl.PRE_CODE_DIR = args.pre_code_dir
-    pl.COP_PRE_CODE_DIR = cop_pre
-    pl.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
-    pl.OP_ORIENT_DIR = args.op_orient_dir
-    pl.GT_EDGES_DIR = args.gt_edges_dir
-    pl.DEDUP_CSV = args.dedup_csv
-    pl.TMP_DIR = args.tmp_dir
-    pl.COP = cop_flag
+    code = gen_code.strip()
+    op = (op_kind or "").strip().lower()
 
-    # reward_fun 内直接读取这些同名全局变量
-    rf.PRE_CODE_DIR = args.pre_code_dir
-    rf.COP_PRE_CODE_DIR = cop_pre
-    rf.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
-    rf.GT_EDGES_DIR = args.gt_edges_dir
-    rf.TMP_DIR = args.tmp_dir
-    rf.COP = cop_flag
+    # 尽量避免“解释文字”混入；允许纯代码或从 ```python``` 提取后的代码
+    # 这里不做非常激进的自然语言过滤，避免误杀合法注释/变量名。
 
-    os.makedirs(args.tmp_dir, exist_ok=True)
-
-
-def build_remote_reward_fn(base_url: str, timeout: float, max_retries: int):
-    """
-    返回一个与 TRL/GRPO 接口兼容的 reward 函数：
-    - 输入: prompts/completions/kwargs(来自 dataset 列)
-    - 输出: list[float]
-    """
-
-    url = f"{base_url.rstrip('/')}/reward"
-    session = requests.Session()
-
-    def _remote_reward_fn(prompts, completions, **kwargs):
-        batch_size = len(completions)
-        metas: list[dict[str, Any]] = []
-
-        for i in range(batch_size):
-            meta_i = {}
-            for key, val in kwargs.items():
-                if isinstance(val, (list, tuple)):
-                    if i < len(val):
-                        meta_i[key] = val[i]
-                else:
-                    meta_i[key] = val
-            metas.append(meta_i)
-
-        payload = {
-            "prompts": list(prompts),
-            "completions": list(completions),
-            "metas": metas,
-        }
-
-        last_err = None
-        for _ in range(max(1, max_retries + 1)):
-            try:
-                resp = session.post(url, json=payload, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                rewards = data.get("rewards", [])
-                ok = data.get("ok", True)
-                if ok and isinstance(rewards, list) and len(rewards) == batch_size:
-                    return [float(r) for r in rewards]
-                last_err = RuntimeError(f"Invalid reward response: {data}")
-            except Exception as e:
-                last_err = e
-
-        print(f"[reward-server] request failed, fallback to -2.0: {last_err}")
-        return [-2.0] * batch_size
-
-    return _remote_reward_fn
-
-
-def main():
-    args = parse_args()
-    set_seed(args.seed)
-    configure_reward_env(args)
-
-    train_ds = load_dataset("json", data_files=args.train_jsonl, split="train")
-    eval_ds = None
-    if args.eval_jsonl:
-        eval_ds = load_dataset("json", data_files=args.eval_jsonl, split="train")
-
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     args.model_name,
-    #     trust_remote_code=True,
-    # )
-    # tokenizer = AutoTokenizer.from_pretrained(
-    #     args.model_name,
-    #     trust_remote_code=True,
-    # )
-
-    # 🔥 LoRA 配置
-    lora_config = LoraConfig(
-        r=8,
-        lora_alpha=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM,
-    )
-
-    # # 🔥 挂 LoRA
-    # model = get_peft_model(model, lora_config)
-
-    # if tokenizer.pad_token is None:
-    #     tokenizer.pad_token = tokenizer.eos_token
-
-    # model.config.pad_token_id = tokenizer.pad_token_id
-    # if hasattr(model, "generation_config") and model.generation_config is not None:
-    #     model.generation_config.pad_token_id = tokenizer.pad_token_id
-    #     model.generation_config.eos_token_id = tokenizer.eos_token_id
-    #     model.generation_config.bos_token_id = tokenizer.bos_token_id
-
-    # deepspeed_config = args.deepspeed_config if args.deepspeed_config else None
-
-    # 配置 GRPO 训练参数
-    grpo_args = GRPOConfig(
-        output_dir=args.output_dir,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        num_train_epochs=args.num_train_epochs,
-        max_steps=args.max_steps,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        num_generations=args.num_generations,
-        max_prompt_length=args.max_prompt_length,
-        max_completion_length=args.max_completion_length,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
-        bf16=args.bf16,
-        fp16=args.fp16,
-        gradient_checkpointing=args.gradient_checkpointing,
-        # deepspeed=deepspeed_config,
-        report_to="none",
-        # use_vllm=True,
-        # vllm_mode="server",
-        # vllm_server_base_url="http://127.0.0.1:8001",
-    )
-
-
-    # 配置 reward 函数
-    reward_func = rf.reward_fn
-    if args.reward_server_url:
-        reward_func = build_remote_reward_fn(
-            base_url=args.reward_server_url,
-            timeout=args.reward_timeout,
-            max_retries=args.reward_max_retries,
+    if op == "chamfer_fillet":
+        # 输出格式要求中的固定 wp 模板（全局坐标系）
+        wp_pat = re.compile(
+            r"wp\s*=\s*cq\.Workplane\(\s*inPlane\s*=\s*Plane\(\s*origin\s*=\s*\(0\s*,\s*0\s*,\s*0\)\s*,\s*"
+            r"normal\s*=\s*Vector\(\s*0\s*,\s*0\s*,\s*1\s*\)\s*,\s*xDir\s*=\s*Vector\(\s*1\s*,\s*0\s*,\s*0\s*\)\s*"
+            r"\)\s*\)"
         )
-    print("grpo_args.num_generations =", grpo_args.num_generations)
-    print("grpo_args.per_device_train_batch_size =", grpo_args.per_device_train_batch_size)
-    # 初始化 GRPOTrainer
-    trainer = GRPOTrainer(
-        model=args.model_name,
-        args=grpo_args,
-        reward_funcs=reward_func,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        # processing_class=tokenizer,
-        peft_config=lora_config,
-    )
+        if not wp_pat.search(code):
+            return False
 
-    trainer.train()
-    trainer.save_model(args.output_dir)
-    # tokenizer.save_pretrained(args.output_dir)
+        # 必须先选边，再在“同一个 edges 变量”上做 fillet/chamfer
+        edge_sel_pat = re.compile(
+            r"(?m)^\s*(edges(?:_\d+)?)\s*=\s*result(?:_\d+)?\s*\.\s*edges\([^)]*\)\s*$"
+        )
+        selections = list(edge_sel_pat.finditer(code))
+        if not selections:
+            return False
+
+        op_calls = list(
+            re.finditer(
+                r"(?m)^\s*(?:shape(?:_\d+)?\s*=\s*)?(edges(?:_\d+)?)\s*\.\s*(fillet|chamfer)\s*\(",
+                code,
+            )
+        )
+        if not op_calls:
+            return False
+
+        selected_names = {m.group(1): m.start() for m in selections}
+        valid_chain = False
+        for m in op_calls:
+            name = m.group(1)
+            if name in selected_names and selected_names[name] < m.start():
+                valid_chain = True
+                break
+        if not valid_chain:
+            return False
+
+        # 要求存在 result 最终赋值
+        if not re.search(r"(?m)^\s*result\s*=\s*.+$", code):
+            return False
+        return True
+
+    # 默认：shape-then-bool
+    shape_tag = re.search(r"(?mi)^\s*#\s*shape\s*$", code)
+    bool_tag = re.search(r"(?mi)^\s*#\s*bool\s*$", code)
+    if not shape_tag or not bool_tag:
+        return False
+    if shape_tag.start() >= bool_tag.start():
+        return False
+
+    shape_block = code[shape_tag.end():bool_tag.start()].strip()
+    bool_block = code[bool_tag.end():].strip()
+    if not shape_block or not bool_block:
+        return False
+
+    # #bool 段必须有 result 赋值（与 prompt 的严格格式一致）
+    if not re.search(r"(?m)^\s*result\s*=\s*.+$", bool_block):
+        return False
+
+    return True
+
+def _tanh_improve(prev_val, now_val, sigma: float):
+    """改变量奖励：越改善越正。"""
+    if prev_val is None or now_val is None:
+        return 0.0
+    return float(math.tanh((prev_val - now_val) / max(sigma, 1e-9)))
+
+def reward_fn(prompts, completions, **kwargs):
+    """
+    TRL/GRPO 会传入等长 prompts & completions（已展平）。
+    你返回等长 reward list[float]。
+    """
+    rewards = []
+    # print(f"Completions: {completions}")
+    # 你可以根据你数据统计给一个尺度；先给保守默认
+    SIGMA_CD = 0.02
+    SIGMA_HD = 0.02
+
+    group_indices = _to_list(kwargs.get("group_index"))
+    ops = _to_list(kwargs.get("op"))
+
+    for i, (prompt, completion) in enumerate(zip(prompts, completions)):
+        # 优先用数据列，避免从 prompt 正则解析
+        pid = _get_by_idx(group_indices, i)
+        op_kind = _get_by_idx(ops, i)
+
+        if pid is not None:
+            pid = str(pid).strip()
+        if op_kind is not None:
+            op_kind = str(op_kind).strip().lower()
+
+        gen_code = _extract_code_block(completion)
+
+        # ---------- 门控 ：格式 ----------
+        if not _format_ok(gen_code, op_kind=op_kind):
+            rewards.append(-2.0)
+            continue
+
+        # step0 判断
+        m = re.search(r"step(\d+)", pid)
+        step_num = int(m.group(1)) if m else -1
+        first_step = (step_num == 0)
+
+        # GT 路径（你现有逻辑：single + full）
+        gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_SINGLE_STEP_DIR)
+
+        # 前序代码（训练里通常你会把 prev_code 嵌进 prompt，但这里直接按你的目录读也行）
+        prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)
+
+        # 为本条样本创建临时工作目录（避免不同样本互相覆盖）
+        workdir = os.path.join(TMP_DIR, "grpo_reward", pid.replace("/", "_"))
+        os.makedirs(workdir, exist_ok=True)
+        single_step_path = os.path.join(workdir, "pred_single.step")
+        full_step_path   = os.path.join(workdir, "pred_full.step")
+        single_py        = os.path.join(workdir, "pred_single.py")
+        full_py          = os.path.join(workdir, "pred_full.py")
+
+        # ---------- 分支：Chamfer/Fillet ----------
+        if op_kind == "chamfer_fillet":
+            # 只做 full（与你评测一致）
+            try:
+                integrated_code, _ = build_integrated_code(prev_code, gen_code, full_step_path, first_step=first_step)
+                with open(full_py, "w", encoding="utf-8") as f:
+                    f.write(integrated_code)
+            except Exception:
+                rewards.append(-2.0)
+                continue
+
+            ok_full, _, err_full = safe_exec_from_path(full_py)
+            if not ok_full or not os.path.exists(full_step_path):
+                rewards.append(-2.0)  # 执行失败强罚
+                continue
+
+            # 边匹配 IoU（你已有）
+            pred_f, pred_c, parse_err = _eval_pred_edges_from_blocks(prev_code, gen_code)
+            gt_f, gt_c = _load_gt_edges_for_pid(GT_EDGES_DIR, pid)
+
+            cfm = _compute_cf_iou_metrics(pred_f, pred_c, gt_f, gt_c)
+            cf_iou = float(cfm.get("cf_iou", 0.0))
+
+            # 组合奖励：可执行+IoU
+            # 你也可以加“预测边数量”约束，防止全选刷分
+            r = 1.0 + 2.0 * cf_iou
+            rewards.append(r)
+            continue
+
+        # ---------- 普通几何操作：single + full ----------
+        # 1) 生成 single/full 代码并落盘
+        try:
+            single_code, info_shape = build_iso_code(prev_code, gen_code, single_step_path, first_step=first_step)
+            integrated_code, _ = build_integrated_code(prev_code, gen_code, full_step_path, first_step=first_step)
+            with open(single_py, "w", encoding="utf-8") as f:
+                f.write(single_code)
+            with open(full_py, "w", encoding="utf-8") as f:
+                f.write(integrated_code)
+        except Exception:
+            rewards.append(-2.0)
+            continue
+
+        # 2) 执行
+        ok_single, _, err_single = safe_exec_from_path(single_py)
+        ok_full,   _, err_full   = safe_exec_from_path(full_py)
+
+        pred_single_exists = ok_single and os.path.exists(single_step_path)
+        pred_full_exists   = ok_full   and os.path.exists(full_step_path)
+
+        # ---------- 门控：至少 full 或 single 有一个成功 ----------
+        if not (pred_single_exists or pred_full_exists):
+            rewards.append(-2.0)
+            continue
+
+        # 3) 指标：single 对 gt_single；full 对 gt_full（与你评测一致）
+        # single
+        if pred_single_exists and gt_single_step:
+            res_s = _safe_get_cd_hd(pred_step_path=single_step_path, gt_step_path=gt_single_step)
+        else:
+            res_s = None
+
+        # full：step0 复用 single；step>=1 固定角度 [0]
+        if pred_full_exists and gt_full_step:
+            if first_step and res_s is not None and getattr(res_s, "ok", False):
+                res_f = res_s
+            else:
+                res_f = _safe_get_cd_hd(pred_step_path=full_step_path, gt_step_path=gt_full_step, angles=[0])
+        else:
+            res_f = None
+
+        # ---------- 奖励组装（门控 + 连续） ----------
+        r = 0.0
+
+        # a) 存活奖励：能执行就加分
+        r += 0.1 * float(pred_single_exists) + 0.2 * float(pred_full_exists)
+
+        # b) 几何有效性（可选，但很建议：防空 mesh / 退化）
+        # 你目前 safe_exec_from_path 没返回 shape 对象，严格做几何 valid 需要你在 build_* 里把 shape 存成变量并读取；
+        # 先用 “存在 step 文件” 作为弱几何门控即可。
+
+        # c) CD/HD 奖励（用绝对值也能跑；更推荐“改变量”，但改变量需要 baseline）
+        # 这里先做绝对：越小越好，用 exp/tanh 规约
+        if res_s is not None and getattr(res_s, "ok", False) and res_s.cd is not None:
+            r += 0.3 * float(math.exp(-5.0 * float(res_s.cd)))
+        if res_f is not None and getattr(res_f, "ok", False) and res_f.cd is not None:
+            # full 更重要
+            r += 1.5 * float(math.exp(-5.0 * float(res_f.cd)))
+
+        # d) 失败轻惩罚：能执行但没算出指标（比如空 mesh）
+        if pred_full_exists and (res_f is None or not getattr(res_f, "ok", False)):
+            r -= 0.5
+        if pred_single_exists and (res_s is None or not getattr(res_s, "ok", False)):
+            r -= 0.2
+
+        # 兜底：避免 reward 全为正导致区分度不足
+        rewards.append(float(r))
+    print(f"Rewards: {rewards}")
+    return rewards
 
 
 if __name__ == "__main__":
-    main()
+
+    # 正确 shape-bool
+    case1 = """
+# shape
+shape = cq.Workplane("XY").box(1,1,1)
+
+# bool
+result = shape
+"""
+
+    # 缺少 bool
+    case2 = """
+# shape
+shape = cq.Workplane("XY").box(1,1,1)
+"""
+
+    # 顺序错误
+    case3 = """
+# bool
+result = shape
+
+# shape
+shape = cq.Workplane("XY").box(1,1,1)
+"""
+
+    # 正确 chamfer/fillet
+    case4 = """
+wp = cq.Workplane(inPlane = Plane(origin = (0,0,0), normal = Vector(0,0,1), xDir = Vector(1,0,0)))
+
+edges = result.edges("|Z")
+shape = edges.fillet(0.5)
+
+result = shape
+"""
+
+    # chamfer 缺少 edge 选择
+    case5 = """
+wp = cq.Workplane(inPlane = Plane(origin = (0,0,0), normal = Vector(0,0,1), xDir = Vector(1,0,0)))
+
+shape = edges.fillet(0.5)
+
+result = shape
+"""
+
+    tests = [
+        ("valid shape-bool", case1, "", True),
+        ("missing bool", case2, "", False),
+        ("wrong order", case3, "", False),
+        ("valid chamfer", case4, "chamfer_fillet", True),
+        ("invalid chamfer", case5, "chamfer_fillet", False),
+    ]
+
+    for name, code, op, expected in tests:
+        res = _format_ok(code, op)
+        print(f"{name}: {res} (expected {expected})")
