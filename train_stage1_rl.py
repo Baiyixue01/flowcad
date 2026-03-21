@@ -264,13 +264,14 @@ def main():
         reward_funcs=reward_func,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        processing_class=tokenizer,
+        # processing_class=tokenizer,
+        peft_config=lora_config,
     )
 
     # 开始训练
     trainer.train()
     trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    # tokenizer.save_pretrained(args.output_dir)
 
 
 if __name__ == "__main__":
