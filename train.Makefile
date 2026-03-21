@@ -83,7 +83,7 @@ train-deepspeed:
 	NCCL_P2P_DISABLE=1 \
 	NCCL_SHM_DISABLE=1 \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-	$(DEEPSPEED) --num_gpus=8 \
+	accelerate launch --config_file accelerate_ds.yaml \
 	$(SCRIPT) \
 	--train-jsonl $(TRAIN_JSONL) \
 	--eval-jsonl $(EVAL_JSONL) \

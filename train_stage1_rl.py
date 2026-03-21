@@ -35,10 +35,10 @@ import os
 from typing import Any
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+from transformers import set_seed
+from peft import LoraConfig, TaskType
 from trl import GRPOConfig, GRPOTrainer
 import requests
-from peft import LoraConfig, get_peft_model, TaskType
 
 
 
@@ -207,7 +207,7 @@ def main():
     lora_config = LoraConfig(
         r=8,
         lora_alpha=16,
-        target_modules=["q_proj", "v_proj"],  # Qwen/Llama 通用
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=0.05,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
@@ -274,6 +274,16 @@ def main():
     )
 
     # 开始训练
+    trainable = 0
+    total = 0
+    for n, p in trainer.model.named_parameters():
+        total += p.numel()
+        if p.requires_grad:
+            trainable += p.numel()
+
+    print(f"trainable params: {trainable}")
+    print(f"total params: {total}")
+    print(f"trainable ratio: {100 * trainable / total:.6f}%")
     trainer.train()
     trainer.save_model(args.output_dir)
     # tokenizer.save_pretrained(args.output_dir)
