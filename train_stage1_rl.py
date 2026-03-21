@@ -26,6 +26,7 @@ python train_stage1_rl.py \
   --pre-code-dir /path/to/pre_code \
   --tmp-dir /path/to/tmp_reward
 """
+
 import reward.pipeline as pl
 import reward.reward_fun as rf
 
@@ -37,6 +38,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from trl import GRPOConfig, GRPOTrainer
 import requests
+from peft import LoraConfig, get_peft_model, TaskType
 
 
 
@@ -56,6 +58,7 @@ def parse_args():
     parser.add_argument("--gt-single-step-dir", required=True, help="GT 单步 STEP 目录")
     parser.add_argument("--op-orient-dir", required=True, help="GT 累计形状（full）STEP 目录")
     parser.add_argument("--gt-edges-dir", required=True, help="GT 边标签目录")
+    parser.add_argument("--dedup-csv", required=True, help="去重映射 CSV（必填）")
     parser.add_argument("--tmp-dir", required=True, help="reward 临时目录")
     parser.add_argument("--mode", choices=["std", "cop"], default="std", help="与 reward 读取 pre_code 的模式")
     parser.add_argument(
@@ -111,6 +114,7 @@ def configure_reward_env(args):
     pl.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
     pl.OP_ORIENT_DIR = args.op_orient_dir
     pl.GT_EDGES_DIR = args.gt_edges_dir
+    pl.DEDUP_CSV = args.dedup_csv
     pl.TMP_DIR = args.tmp_dir
     pl.COP = cop_flag
 
@@ -179,21 +183,39 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     configure_reward_env(args)
-    # 加载数据集
+
     train_ds = load_dataset("json", data_files=args.train_jsonl, split="train")
     eval_ds = None
     if args.eval_jsonl:
         eval_ds = load_dataset("json", data_files=args.eval_jsonl, split="train")
-    # 加载模型和 tokenizer
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         trust_remote_code=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        trust_remote_code=True,
+    )
+
+    # ⚠️ RL 必须关 cache
+    model.config.use_cache = False
+
+    # 🔥 LoRA 配置
+    lora_config = LoraConfig(
+        r=8,
+        lora_alpha=16,
+        target_modules=["q_proj", "v_proj"],  # Qwen/Llama 通用
+        lora_dropout=0.05,
+        bias="none",
+        task_type=TaskType.CAUSAL_LM,
+    )
+
+    # 🔥 挂 LoRA
+    model = get_peft_model(model, lora_config)
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, trust_remote_code=True)
 
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model, "generation_config") and model.generation_config is not None:
@@ -234,7 +256,6 @@ def main():
             timeout=args.reward_timeout,
             max_retries=args.reward_max_retries,
         )
-
     # 初始化 GRPOTrainer
     trainer = GRPOTrainer(
         model=model,

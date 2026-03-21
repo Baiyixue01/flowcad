@@ -12,6 +12,8 @@ GT_SINGLE_STEP_DIR := /data/baiyixue/CAD/step_files
 OP_ORIENT_DIR := /data/baiyixue/CAD/op_oriented_step
 GT_EDGES_DIR := data/gt_edges_json
 TMP_DIR := /home/baiyixue/project/flowcad/tmp_reward
+DEDUP_CSV := data/dedup.csv
+
 
 # 训练参数
 LR := 1e-6
@@ -23,6 +25,8 @@ GEN := 2
 # 默认目标（本地 reward）
 # =========================
 train:
+	NCCL_P2P_DISABLE=1 \
+	NCCL_SHM_DISABLE=1 \
 	CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 	torchrun --standalone --nproc_per_node=6 \
@@ -35,13 +39,13 @@ train:
 	--gt-single-step-dir $(GT_SINGLE_STEP_DIR) \
 	--op-orient-dir $(OP_ORIENT_DIR) \
 	--gt-edges-dir $(GT_EDGES_DIR) \
+	--dedup-csv $(DEDUP_CSV) \
 	--tmp-dir $(TMP_DIR) \
 	--learning-rate $(LR) \
 	--per-device-train-batch-size $(BATCH) \
 	--gradient-accumulation-steps $(GRAD_ACC) \
 	--num-generations $(GEN) \
-	--fp16 \
-	--gradient-checkpointing
+	--fp16
 
 # =========================
 # 使用远程 reward server
@@ -65,6 +69,8 @@ train-remote:
 	--bf16
 
 vllm-serve:
+		NCCL_P2P_DISABLE=1 \
+		NCCL_SHM_DISABLE=1 \
 		CUDA_VISIBLE_DEVICES=0,1 trl vllm-serve \
 		--model $(MODEL) \
 		--tensor-parallel-size 2 \

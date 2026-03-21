@@ -147,7 +147,7 @@ def reward_fn(prompts, completions, **kwargs):
     你返回等长 reward list[float]。
     """
     rewards = []
-    print(f"Completions: {completions}")
+    # print(f"Completions: {completions}")
     # 你可以根据你数据统计给一个尺度；先给保守默认
     SIGMA_CD = 0.02
     SIGMA_HD = 0.02
