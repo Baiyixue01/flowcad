@@ -59,6 +59,25 @@ def _extract_code_block(text: str) -> str:
         return (m.group(1) or "").strip()
     return text.strip()
 
+
+def _safe_path_component(text: str) -> str:
+    """将任意字符串转换成较安全的路径片段。"""
+    s = (text or "").strip()
+    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", s)
+    return s[:120] if s else "unknown"
+
+
+def _build_unique_workdir(tmp_dir: str, pid: str, sample_idx: int) -> str:
+    """
+    为每个 completion 创建唯一目录，避免多 rank / 多 completion 并发覆盖。
+    目录结构: TMP_DIR/grpo_reward/<pid>/<rank>_<sample>_<random>/
+    """
+    pid_part = _safe_path_component(pid)
+    rank = os.environ.get("RANK", "0")
+    base = os.path.join(tmp_dir, "grpo_reward", pid_part)
+    os.makedirs(base, exist_ok=True)
+    return tempfile.mkdtemp(prefix=f"r{rank}_i{sample_idx:03d}_", dir=base)
+
 def _format_ok(gen_code: str, op_kind: str = "") -> bool:
     """
     对齐 build_incremental_cq_prompt 的输出格式要求：
@@ -184,8 +203,7 @@ def reward_fn(prompts, completions, **kwargs):
         prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)
 
         # 为本条样本创建临时工作目录（避免不同样本互相覆盖）
-        workdir = os.path.join(TMP_DIR, "grpo_reward", pid.replace("/", "_"))
-        os.makedirs(workdir, exist_ok=True)
+        workdir = _build_unique_workdir(TMP_DIR, pid, i)
         single_step_path = os.path.join(workdir, "pred_single.step")
         full_step_path   = os.path.join(workdir, "pred_full.step")
         single_py        = os.path.join(workdir, "pred_single.py")
