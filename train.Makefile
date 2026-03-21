@@ -15,6 +15,9 @@ TMP_DIR := /home/baiyixue/project/flowcad/tmp_reward
 DEDUP_CSV := data/dedup.csv
 
 
+MAX_INPUT = 16384
+MAX_OUPUT = 1024
+
 # 训练参数
 LR := 1e-6
 BATCH := 1
@@ -27,9 +30,8 @@ GEN := 2
 train:
 	NCCL_P2P_DISABLE=1 \
 	NCCL_SHM_DISABLE=1 \
-	CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-	torchrun --standalone --nproc_per_node=6 \
+	torchrun --standalone --nproc_per_node=8 \
 	$(SCRIPT) \
 	--train-jsonl $(TRAIN_JSONL) \
 	--eval-jsonl $(EVAL_JSONL) \
@@ -44,7 +46,10 @@ train:
 	--learning-rate $(LR) \
 	--per-device-train-batch-size $(BATCH) \
 	--gradient-accumulation-steps $(GRAD_ACC) \
+	--max-prompt-length $(MAX_INPUT) \
+	--max-completion-length $(MAX_OUPUT) \
 	--num-generations $(GEN) \
+	--gradient-checkpointing
 	--fp16
 
 # =========================

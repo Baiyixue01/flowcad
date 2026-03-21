@@ -189,14 +189,14 @@ def main():
     if args.eval_jsonl:
         eval_ds = load_dataset("json", data_files=args.eval_jsonl, split="train")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name,
-        trust_remote_code=True,
-    )
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     args.model_name,
+    #     trust_remote_code=True,
+    # )
+    # tokenizer = AutoTokenizer.from_pretrained(
+    #     args.model_name,
+    #     trust_remote_code=True,
+    # )
 
     # ⚠️ RL 必须关 cache
     model.config.use_cache = False
@@ -211,17 +211,17 @@ def main():
         task_type=TaskType.CAUSAL_LM,
     )
 
-    # 🔥 挂 LoRA
-    model = get_peft_model(model, lora_config)
+    # # 🔥 挂 LoRA
+    # model = get_peft_model(model, lora_config)
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # if tokenizer.pad_token is None:
+    #     tokenizer.pad_token = tokenizer.eos_token
 
-    model.config.pad_token_id = tokenizer.pad_token_id
-    if hasattr(model, "generation_config") and model.generation_config is not None:
-        model.generation_config.pad_token_id = tokenizer.pad_token_id
-        model.generation_config.eos_token_id = tokenizer.eos_token_id
-        model.generation_config.bos_token_id = tokenizer.bos_token_id
+    # model.config.pad_token_id = tokenizer.pad_token_id
+    # if hasattr(model, "generation_config") and model.generation_config is not None:
+    #     model.generation_config.pad_token_id = tokenizer.pad_token_id
+    #     model.generation_config.eos_token_id = tokenizer.eos_token_id
+    #     model.generation_config.bos_token_id = tokenizer.bos_token_id
 
     # 配置 GRPO 训练参数
     grpo_args = GRPOConfig(
@@ -243,10 +243,11 @@ def main():
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
         report_to="none",
-        use_vllm=True,
-        vllm_mode="server",
-        vllm_server_base_url="http://127.0.0.1:8001",
+        # use_vllm=True,
+        # vllm_mode="server",
+        # vllm_server_base_url="http://127.0.0.1:8001",
     )
+
 
     # 配置 reward 函数
     reward_func = rf.reward_fn
@@ -258,7 +259,7 @@ def main():
         )
     # 初始化 GRPOTrainer
     trainer = GRPOTrainer(
-        model=model,
+        model=args.model_name,
         args=grpo_args,
         reward_funcs=reward_func,
         train_dataset=train_ds,
