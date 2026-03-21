@@ -1,6 +1,8 @@
 PYTHON := /data/baiyixue/miniforge3/envs/trl/bin/python
 SCRIPT := /home/baiyixue/project/flowcad/train_stage1_rl.py
 DEEPSPEED := deepspeed
+#记得设置accelerate config,然后就不需要传deepspeed-config
+
 
 TRAIN_JSONL := dataset/RL_stageI_step_level/step_rl_train_sampled.jsonl
 EVAL_JSONL := dataset/RL_stageI_step_level/step_rl_val_sampled.jsonl
@@ -25,6 +27,7 @@ LR := 1e-6
 BATCH := 1
 GRAD_ACC := 2
 GEN := 2
+
 
 # =========================
 # 默认目标（本地 reward）
@@ -51,8 +54,34 @@ train:
 	--max-prompt-length $(MAX_INPUT) \
 	--max-completion-length $(MAX_OUPUT) \
 	--num-generations $(GEN) \
-	--gradient-checkpointing \
 	--fp16
+
+# =========================
+# 使用 DeepSpeed 训练
+# =========================
+train-deepspeed:
+	NCCL_P2P_DISABLE=1 \
+	NCCL_SHM_DISABLE=1 \
+	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	accelerate launch \
+	$(SCRIPT) \
+	--train-jsonl $(TRAIN_JSONL) \
+	--eval-jsonl $(EVAL_JSONL) \
+	--model-name $(MODEL) \
+	--output-dir $(OUTPUT_DIR)_ds \
+	--pre-code-dir $(PRE_CODE_DIR) \
+	--gt-single-step-dir $(GT_SINGLE_STEP_DIR) \
+	--op-orient-dir $(OP_ORIENT_DIR) \
+	--gt-edges-dir $(GT_EDGES_DIR) \
+	--dedup-csv $(DEDUP_CSV) \
+	--tmp-dir $(TMP_DIR) \
+	--learning-rate $(LR) \
+	--per-device-train-batch-size $(BATCH) \
+	--gradient-accumulation-steps $(GRAD_ACC) \
+	--max-prompt-length $(MAX_INPUT) \
+	--max-completion-length $(MAX_OUPUT) \
+	--num-generations $(GEN) \
+	--bf16
 
 # =========================
 # 使用远程 reward server
@@ -76,34 +105,7 @@ train-remote:
 	--num-generations $(GEN) \
 	--bf16
 
-# =========================
-# 使用 DeepSpeed 训练
-# =========================
-train-deepspeed:
-	NCCL_P2P_DISABLE=1 \
-	NCCL_SHM_DISABLE=1 \
-	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-	accelerate launch --config_file accelerate_ds.yaml \
-	$(SCRIPT) \
-	--train-jsonl $(TRAIN_JSONL) \
-	--eval-jsonl $(EVAL_JSONL) \
-	--model-name $(MODEL) \
-	--output-dir $(OUTPUT_DIR)_ds \
-	--pre-code-dir $(PRE_CODE_DIR) \
-	--gt-single-step-dir $(GT_SINGLE_STEP_DIR) \
-	--op-orient-dir $(OP_ORIENT_DIR) \
-	--gt-edges-dir $(GT_EDGES_DIR) \
-	--dedup-csv $(DEDUP_CSV) \
-	--tmp-dir $(TMP_DIR) \
-	--learning-rate $(LR) \
-	--per-device-train-batch-size $(BATCH) \
-	--gradient-accumulation-steps $(GRAD_ACC) \
-	--max-prompt-length $(MAX_INPUT) \
-	--max-completion-length $(MAX_OUPUT) \
-	--num-generations $(GEN) \
-	--gradient-checkpointing \
-	--bf16 \
-	--deepspeed-config $(DS_CONFIG)
+
 
 vllm-serve:
 		NCCL_P2P_DISABLE=1 \
