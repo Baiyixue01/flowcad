@@ -939,7 +939,7 @@ def _compute_summary(rows: List[dict], pid: str, op_kind: str) -> dict:
 
 def _safe_get_cd_hd(pred_step_path, gt_step_path, *, num_points=None, angles=None):
     """包装 get_cd_hd，任何异常都转成 MetricsResult(ok=False, reason=...)；支持固定角度。"""
-    from utils.compute_3D import get_cd_hd, MetricsResult
+    from reward.utils.compute_3D import get_cd_hd, MetricsResult
     try:
         if angles is None:
             return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path)
@@ -954,10 +954,10 @@ def process_one(r, K, COP, GT_SINGLE_STEP_DIR, GT_EDGES_DIR):
     """处理单个样本，返回 (per_cand_rows, summary_rows, pid)。per_cand_rows 含 single/full 两类，用 kind 区分。"""
     pid = str(r["group_index"])
     import re, os
-    from utils.compute_3D import get_cd_hd, MetricsResult
-    from model_call.call_model import get_model_candidates
-    from model_call.prompt import build_incremental_cq_prompt
-    from utils.post_code_process import build_iso_code, build_integrated_code
+    from reward.utils.compute_3D import get_cd_hd, MetricsResult
+    from reward.model_call.call_model import get_model_candidates
+    from reward.model_call.prompt import build_incremental_cq_prompt
+    from reward.utils.post_code_process import build_iso_code, build_integrated_code
 
     # -------- 基本信息 --------
     m = re.search(r"step(\d+)", pid)
