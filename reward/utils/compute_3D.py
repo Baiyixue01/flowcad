@@ -43,6 +43,15 @@ def sample_and_normalize_from_step(step_path: str, num_points: int = 8192) -> np
         pts = pts / scale
     return pts
 
+def sample_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
+    """STEP → STL → 点云（不做 normalization）"""
+    with tempfile.TemporaryDirectory() as td:
+        stl_path = os.path.join(td, "tmp.stl")
+        step_to_stl(step_path, stl_path)
+        pts = load_mesh_as_points(stl_path, num_points=num_points)
+
+    return pts
+
 
 def _rotation_matrix_xyz(x_deg: float, y_deg: float, z_deg: float) -> np.ndarray:
     """按 XYZ 欧拉角（单位：度）生成旋转矩阵，等价于 Rx @ Ry @ Rz。"""
@@ -93,8 +102,8 @@ def compare_step_chamfer_with_rotation_only(
         # 统一保留参数以兼容旧调用，但不再执行可视化。
         _ = vis_prefix
 
-    src = sample_and_normalize_from_step(step_path_1, num_points=num_points)
-    tgt = sample_and_normalize_from_step(step_path_2, num_points=num_points)
+    src = sample_from_step(step_path_1, num_points=num_points)
+    tgt = sample_from_step(step_path_2, num_points=num_points)
 
     best_cd = float("inf")
     best_score = float("inf")
@@ -119,6 +128,28 @@ def compare_step_chamfer_with_rotation_only(
 
     best_hd = hausdorff_distance(best_align, tgt)
     return best_cd, best_hd, best_angles
+
+def compare_step_chamfer_no_rotation(
+    step_path_1: str,
+    step_path_2: str,
+    num_points: int = 8192,
+    angles: list[int] = (0, 90, 180, 270),
+    save_vis: bool = False,
+    vis_prefix: str = "vis",
+    
+):
+    """不做旋转枚举，直接比较两个 STEP 的 Chamfer / Hausdorff。"""
+    if save_vis:
+        # 保留参数以兼容旧调用，但不执行可视化
+        _ = vis_prefix
+
+    src = sample_from_step(step_path_1, num_points=num_points)
+    tgt = sample_from_step(step_path_2, num_points=num_points)
+
+    cd = chamfer_distance(src, tgt)
+    hd = hausdorff_distance(src, tgt)
+
+    return cd, hd, (0, 0, 0)
 
 
 def compare_step_chamfer_with_icp_rotation(
@@ -168,3 +199,39 @@ def get_cd_hd(
         vis_prefix=vis_prefix,
     )
     return MetricsResult(cd=cd, hd=hd, best_euler_angle=best_angles, ok=True)
+
+if __name__ == "__main__":
+    import time
+    import psutil
+    import os
+
+    process = psutil.Process(os.getpid())
+
+    # 开始前内存
+    mem_before = process.memory_info().rss / 1024**2  # MB
+    STEP_A = "/home/baiyixue/project/flowcad/dataset/k0_full.step"
+    STEP_B = "/home/baiyixue/project/flowcad/dataset/k0_full.step"
+
+    NUM_POINTS = 8192
+    ANGLES = [0, 90, 180, 270]
+
+    t0 = time.time()
+    # cd, hd, ang = compare_step_chamfer_with_rotation_only(
+    #     STEP_A, STEP_B, num_points=NUM_POINTS, angles=ANGLES
+    # )
+    cd, hd, ang = compare_step_chamfer_no_rotation(
+        STEP_A, STEP_B, num_points=NUM_POINTS, angles=ANGLES
+    )
+    t1 = time.time()
+
+    # 结束后内存
+    mem_after = process.memory_info().rss / 1024**2  # MB
+
+    print(f"Best Euler angles (deg): {ang}")
+    print(f"Chamfer Distance: {cd:.6f}")
+    print(f"Hausdorff Distance: {hd:.6f}")
+    print(f"Elapsed: {t1 - t0:.3f}s")
+
+    print(f"[RAM] before: {mem_before:.2f} MB")
+    print(f"[RAM] after : {mem_after:.2f} MB")
+    print(f"[RAM] delta : {mem_after - mem_before:.2f} MB")
