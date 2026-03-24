@@ -209,6 +209,10 @@ def build_split(items, prompt_map, op_map, out_path: Path, missing_rows: list):
     n_ok = 0
     with open(out_path, "w", encoding="utf-8") as fout:
         for sid in items:
+            # 过滤掉 step0，不写入 Stage-I 数据集
+            if is_step0(sid):
+                continue
+
             op_instr = prompt_map.get(sid)
             if not op_instr:
                 missing_rows.append([sid, "missing_prompt", "", ""])
@@ -228,13 +232,10 @@ def build_split(items, prompt_map, op_map, out_path: Path, missing_rows: list):
                 missing_rows.append([sid, f"read_error_gt:{e}", str(pre_code_path) if pre_code_path else "", str(gt_code_path)])
                 continue
 
-            # step0 允许无 pre_code；其他 step 必须有
+            # step1+ 必须有 pre_code
             if pre_code_path is None:
-                if is_step0(sid):
-                    pre_code = ""  # builder 会写 "No previous code..."
-                else:
-                    missing_rows.append([sid, "missing_pre_code", "", str(gt_code_path)])
-                    continue
+                missing_rows.append([sid, "missing_pre_code", "", str(gt_code_path)])
+                continue
             else:
                 try:
                     pre_code = read_text(pre_code_path)
