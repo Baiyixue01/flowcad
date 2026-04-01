@@ -8,11 +8,25 @@ from typing import Optional
 
 import cadquery as cq
 import numpy as np
-import trimesh
 from scipy.spatial import cKDTree
-
+import trimesh
+import time
 
 # ---------------------- 基础工具 ----------------------
+def _resample_points(points: np.ndarray, num_points: int) -> np.ndarray:
+    """将输入点云重采样到固定点数。"""
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3 or len(pts) == 0:
+        raise RuntimeError("Point cloud is empty or has invalid shape")
+
+    if len(pts) == num_points:
+        return pts
+
+    replace = len(pts) < num_points
+    indices = np.random.choice(len(pts), size=num_points, replace=replace)
+    return pts[indices]
+
+
 def step_to_stl(step_path: str, stl_path: str) -> None:
     """把 STEP 用 CadQuery 导出为 STL（三角网）"""
     shape = cq.importers.importStep(step_path)  # 可能是 Compound
@@ -27,6 +41,12 @@ def load_mesh_as_points(mesh_path: str, num_points: int = 8192) -> np.ndarray:
 
     points, _ = trimesh.sample.sample_surface(mesh, num_points)
     return np.asarray(points, dtype=np.float64)
+
+
+def load_npy_as_points(npy_path: str, num_points: int = 8192) -> np.ndarray:
+    """读取 .npy 点云，并重采样到固定点数。"""
+    pts = np.load(npy_path)
+    return _resample_points(pts, num_points)
 
 
 def sample_and_normalize_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
@@ -51,6 +71,17 @@ def sample_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
         pts = load_mesh_as_points(stl_path, num_points=num_points)
 
     return pts
+
+
+def sample_points_from_path(path: str, num_points: int = 8192) -> np.ndarray:
+    """按文件类型读取点云；支持 STEP/STP/NPY。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in {".step", ".stp"}:
+        return sample_and_normalize_from_step(path, num_points=num_points)
+        # return sample_from_step(path, num_points=num_points)
+    if ext == ".npy":
+        return load_npy_as_points(path, num_points=num_points)
+    raise RuntimeError(f"Unsupported 3D input format: {path}")
 
 
 def _rotation_matrix_xyz(x_deg: float, y_deg: float, z_deg: float) -> np.ndarray:
@@ -102,8 +133,8 @@ def compare_step_chamfer_with_rotation_only(
         # 统一保留参数以兼容旧调用，但不再执行可视化。
         _ = vis_prefix
 
-    src = sample_from_step(step_path_1, num_points=num_points)
-    tgt = sample_from_step(step_path_2, num_points=num_points)
+    src = sample_points_from_path(step_path_1, num_points=num_points)
+    tgt = sample_points_from_path(step_path_2, num_points=num_points)
 
     best_cd = float("inf")
     best_score = float("inf")
@@ -143,8 +174,8 @@ def compare_step_chamfer_no_rotation(
         # 保留参数以兼容旧调用，但不执行可视化
         _ = vis_prefix
 
-    src = sample_from_step(step_path_1, num_points=num_points)
-    tgt = sample_from_step(step_path_2, num_points=num_points)
+    src = sample_points_from_path(step_path_1, num_points=num_points)
+    tgt = sample_points_from_path(step_path_2, num_points=num_points)
 
     cd = chamfer_distance(src, tgt)
     hd = hausdorff_distance(src, tgt)
@@ -209,8 +240,9 @@ if __name__ == "__main__":
 
     # 开始前内存
     mem_before = process.memory_info().rss / 1024**2  # MB
-    STEP_A = "/home/baiyixue/project/flowcad/dataset/k0_full.step"
-    STEP_B = "/home/baiyixue/project/flowcad/dataset/k0_full.step"
+    STEP_A = "/data/baiyixue/CAD/op_oriented_step_sketch/02815_index_14/13_14_15_16/next_model.step"
+    # STEP_B = "/data/baiyixue/CAD/op_oriented_step_pc_normalized/02815_index_14/13_14_15_16/next_model.npy"
+    STEP_B = "/data/baiyixue/CAD/op_oriented_step_sketch/02815_index_14/13_14_15_16/next_model.step"
 
     NUM_POINTS = 8192
     ANGLES = [0, 90, 180, 270]
@@ -227,7 +259,6 @@ if __name__ == "__main__":
     # 结束后内存
     mem_after = process.memory_info().rss / 1024**2  # MB
 
-    print(f"Best Euler angles (deg): {ang}")
     print(f"Chamfer Distance: {cd:.6f}")
     print(f"Hausdorff Distance: {hd:.6f}")
     print(f"Elapsed: {t1 - t0:.3f}s")

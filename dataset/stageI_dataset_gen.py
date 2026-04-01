@@ -299,8 +299,8 @@ def main():
     # 生成
     missing_rows = []  # [sample_id, reason, pre_path, gt_path]
 
-    train_path = out_dir / "step_rl_train.jsonl"
-    val_path = out_dir / "step_rl_val.jsonl"
+    train_path = out_dir / "step_rl_train_without_step0.jsonl"
+    val_path = out_dir / "step_rl_val_without_step0.jsonl"
 
     n_train = build_split(train_ids, prompt_map, op_map, train_path, missing_rows)
     n_val   = build_split(val_ids,   prompt_map, op_map, val_path,   missing_rows)

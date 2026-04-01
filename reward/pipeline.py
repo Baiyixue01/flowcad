@@ -18,6 +18,8 @@ import argparse
 from datetime import datetime
 _dedup_map = None
 THINKING = True   # === NEW: thinking ===
+GT_SINGLE_PC_DIR = None
+GT_FULL_PC_DIR = None
 def build_arg_parser():
     p = argparse.ArgumentParser(
         description="Op-CAD 多进程评测脚本（可指定 test 名/模型名 与 cop/非cop 模式）"
@@ -46,7 +48,9 @@ def build_arg_parser():
     p.add_argument("--pre-code-dir", default="./data/pre_code", help="非COP：前序代码目录")
     p.add_argument("--cop-pre-code-dir",default="./data/pre_code_cop", help="COP：前序代码目录（增量链）")
     p.add_argument("--gt-single-step-dir", required=True, help="单步GT STEP根目录")
+    p.add_argument("--gt-single-pc-dir", default=None, help="可选：单步GT点云 NPY 根目录；提供后 3D 评测优先读 .npy")
     p.add_argument("--op-orient-dir", required=True, help="整体形状（累计到 stepN）的 STEP 根目录")
+    p.add_argument("--gt-full-pc-dir", default=None, help="可选：累计形状GT点云 NPY 根目录；提供后 3D 评测优先读 .npy")
     p.add_argument("--dedup-csv", required=True, help="去重映射 CSV（group_index, duplicate_of_group_index）")
     p.add_argument("--gt-edges-dir", required=True, help="GT 边目录（之前抽取的 JSON 根目录，例如 /home/.../gt_edges_json）")
 
@@ -107,7 +111,7 @@ def build_arg_parser():
 
 def apply_args(args):
     global PROMPTS_CSV, OUT_DIR, PRE_CODE_DIR, COP_PRE_CODE_DIR, DEDUP_CSV, GT_EDGES_DIR
-    global GT_SINGLE_STEP_DIR, OP_ORIENT_DIR, K, DEVICE, PASS_METRIC, COS_THRESHOLD
+    global GT_SINGLE_STEP_DIR, GT_SINGLE_PC_DIR, GT_FULL_PC_DIR, OP_ORIENT_DIR, K, DEVICE, PASS_METRIC, COS_THRESHOLD
     global FIVECROP, COP, SAVE_STEP, SAVE_RENDER, TMP_DIR, RESUME
     global SEED, DINO_MODEL_ID, NPROC, WRITE_EVERY
     global WRITE_SUMMARY
@@ -156,6 +160,8 @@ def apply_args(args):
     GT_EDGES_DIR = args.gt_edges_dir
 
     GT_SINGLE_STEP_DIR = args.gt_single_step_dir
+    GT_SINGLE_PC_DIR = args.gt_single_pc_dir
+    GT_FULL_PC_DIR = args.gt_full_pc_dir
     OP_ORIENT_DIR = args.op_orient_dir
 
     K = args.k
@@ -406,6 +412,30 @@ def _pick_single_step_path(group_dir: str, indices: List[int]) -> Optional[str]:
             return p
     return None
 
+
+def _pick_single_pc_path(group_dir: str, indices: List[int]) -> Optional[str]:
+    """
+    在 <group_dir> 下，为“单步（isolated）形状”挑选 .npy 路径。
+    优先尝试与 step 目录同名的目录内文件，其次尝试把目录本身视为 .npy 文件名。
+    """
+    if not os.path.isdir(group_dir) or not indices:
+        return None
+
+    candidates = []
+    combos = [f"step{c}" for c in _combo_names_from_indices(indices)]
+    for name in combos:
+        candidates.extend([
+            os.path.join(group_dir, name, "3D.npy"),
+            os.path.join(group_dir, name, "pointcloud.npy"),
+            os.path.join(group_dir, name, "pc.npy"),
+            os.path.join(group_dir, f"{name}.npy"),
+        ])
+
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
 def _pick_full_step_path(op_orient_group_dir: str, expected_indices: List[int]) -> Optional[str]:
     """
     在 /data/.../op_orientated_step/<group>/ 下，按多种约定尝试找到“整体形状”的 step：
@@ -433,6 +463,39 @@ def _pick_full_step_path(op_orient_group_dir: str, expected_indices: List[int]) 
                 os.path.join(op_orient_group_dir, c, last, "next_model.step"),
                 os.path.join(op_orient_group_dir, last, "next_model.step"),
                 os.path.join(op_orient_group_dir, last, "3D.step"),
+            ]
+
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+def _pick_full_pc_path(op_orient_group_dir: str, expected_indices: List[int]) -> Optional[str]:
+    """
+    在累计形状目录下查找 .npy，命名规则与 _pick_full_step_path 保持一致。
+    """
+    if not os.path.isdir(op_orient_group_dir):
+        return None
+    combos = _combo_names_from_indices(expected_indices)
+
+    candidates = []
+    for c in combos:
+        last = c.split("_")[-1].split("-")[-1].split(",")[-1] if c else None
+        candidates += [
+            os.path.join(op_orient_group_dir, c, "next_model.npy"),
+            os.path.join(op_orient_group_dir, c, "3D.npy"),
+            os.path.join(op_orient_group_dir, c, "pointcloud.npy"),
+            os.path.join(op_orient_group_dir, c, "pc.npy"),
+            os.path.join(op_orient_group_dir, f"{c}.npy"),
+        ]
+        if last:
+            candidates += [
+                os.path.join(op_orient_group_dir, c, last, "next_model.npy"),
+                os.path.join(op_orient_group_dir, c, last, "3D.npy"),
+                os.path.join(op_orient_group_dir, last, "next_model.npy"),
+                os.path.join(op_orient_group_dir, last, "3D.npy"),
+                os.path.join(op_orient_group_dir, f"{last}.npy"),
             ]
 
     for p in candidates:
@@ -561,13 +624,13 @@ def load_dedup_map() -> dict:
     return _dedup_map
 
 
-def resolve_gt_paths(pid: str, GT_SINGLE_STEP_DIR: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def resolve_gt_paths(pid: str, GT_SINGLE_STEP_DIR: str) -> Tuple[Optional[str], Optional[str]]:
    
     assert OP_ORIENT_DIR, "OP_ORIENT_DIR not set. Call apply_args() first."
     """
-    返回: (gt_single_step_path, gt_full_step_path)
-    - single: 原本的“该步的 isolated 形状”（GT_SINGLE_STEP_DIR）
-    - full  : “累计到该步的整体形状”（OP_ORIENT_DIR），按多种目录约定自动匹配
+    返回: (gt_single_path, gt_full_path)
+    - single: 优先使用 GT_SINGLE_PC_DIR 下的 .npy，否则回退 GT_SINGLE_STEP_DIR 下的 STEP
+    - full  : 优先使用 GT_FULL_PC_DIR 下的 .npy，否则回退 OP_ORIENT_DIR 下的 STEP
     """
     dedup = load_dedup_map()
 
@@ -587,18 +650,32 @@ def resolve_gt_paths(pid: str, GT_SINGLE_STEP_DIR: str) -> Tuple[Optional[str], 
 
     m = _parse_group_info_txt(gi_path)
     expected = m.get(step, [])
-    gt_single = _pick_single_step_path(group_dir, expected)
+    gt_single = None
+    if GT_SINGLE_PC_DIR:
+        pc_group_dir = os.path.join(GT_SINGLE_PC_DIR, base_used.replace("/", os.sep))
+        gt_single = _pick_single_pc_path(pc_group_dir, expected)
+        if gt_single is None:
+            print(f"[WARN] single-step npy not found under {pc_group_dir} for indices={expected}")
+    if gt_single is None:
+        gt_single = _pick_single_step_path(group_dir, expected)
 
     if gt_single and not os.path.exists(gt_single):
-        print(f"[WARN] expected 3D.step not found: {gt_single}")
+        print(f"[WARN] expected GT 3D file not found: {gt_single}")
         gt_single = None
     # ========= 整体（新增逻辑） =========
-    op_orient_group_dir = os.path.join(OP_ORIENT_DIR, base_used.replace("/", os.sep))
-    gt_full = _pick_full_step_path(op_orient_group_dir, expected)
+    gt_full = None
+    if GT_FULL_PC_DIR:
+        full_pc_group_dir = os.path.join(GT_FULL_PC_DIR, base_used.replace("/", os.sep))
+        gt_full = _pick_full_pc_path(full_pc_group_dir, expected)
+        if gt_full is None:
+            print(f"[WARN] full-step npy not found under {full_pc_group_dir} for indices={expected}")
+    if gt_full is None:
+        op_orient_group_dir = os.path.join(OP_ORIENT_DIR, base_used.replace("/", os.sep))
+        gt_full = _pick_full_step_path(op_orient_group_dir, expected)
 
     if gt_full is None:
         # 兜底打印方便排查
-        print(f"[WARN] full-step not found under {op_orient_group_dir} for indices={expected}")
+        print(f"[WARN] full-step 3D GT not found for {base_used}/{step}, indices={expected}")
 
     return gt_single, gt_full
 
@@ -938,13 +1015,18 @@ def _compute_summary(rows: List[dict], pid: str, op_kind: str) -> dict:
     }
 
 def _safe_get_cd_hd(pred_step_path, gt_step_path, *, num_points=None, angles=None):
-    """包装 get_cd_hd，任何异常都转成 MetricsResult(ok=False, reason=...)；支持固定角度。"""
+    """包装 get_cd_hd，GT 可为 STEP 或 NPY；任何异常都转成 MetricsResult。"""
     from reward.utils.compute_3D import get_cd_hd, MetricsResult
     try:
         if angles is None:
-            return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path)
+            if num_points is None:
+                return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path)
+            return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path, num_points=num_points)
         else:
-            return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path, angles=angles)
+            kwargs = {"pred_step_path": pred_step_path, "gt_step_path": gt_step_path, "angles": angles}
+            if num_points is not None:
+                kwargs["num_points"] = num_points
+            return get_cd_hd(**kwargs)
     except Exception as e:
         reason = f"metric_exception:{type(e).__name__}:{e}"
         return MetricsResult(None, None, None, ok=False, reason=reason)

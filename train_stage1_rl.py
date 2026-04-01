@@ -21,7 +21,9 @@ python train_stage1_rl.py \
   --model-name Qwen/Qwen2.5-Coder-7B-Instruct \
   --output-dir /path/to/outputs/stage1_rl \
   --gt-single-step-dir /path/to/gt_single_step \
+  --gt-single-pc-dir /path/to/gt_single_pc \
   --op-orient-dir /path/to/op_orientated_step \
+  --gt-full-pc-dir /path/to/gt_full_pc \
   --gt-edges-dir /path/to/gt_edges_json \
   --pre-code-dir /path/to/pre_code \
   --tmp-dir /path/to/tmp_reward
@@ -56,7 +58,9 @@ def parse_args():
     parser.add_argument("--pre-code-dir", required=True, help="前序代码目录（std 模式）")
     parser.add_argument("--cop-pre-code-dir", default="", help="前序代码目录（cop 模式，可选）")
     parser.add_argument("--gt-single-step-dir", required=True, help="GT 单步 STEP 目录")
+    parser.add_argument("--gt-single-pc-dir", default=None, help="可选：GT 单步 NPY 点云目录")
     parser.add_argument("--op-orient-dir", required=True, help="GT 累计形状（full）STEP 目录")
+    parser.add_argument("--gt-full-pc-dir", default=None, help="可选：GT 累计形状（full）NPY 点云目录")
     parser.add_argument("--gt-edges-dir", required=True, help="GT 边标签目录")
     parser.add_argument("--dedup-csv", required=True, help="去重映射 CSV（必填）")
     parser.add_argument("--tmp-dir", required=True, help="reward 临时目录")
@@ -117,6 +121,8 @@ def configure_reward_env(args):
     pl.PRE_CODE_DIR = args.pre_code_dir
     pl.COP_PRE_CODE_DIR = cop_pre
     pl.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
+    pl.GT_SINGLE_PC_DIR = args.gt_single_pc_dir
+    pl.GT_FULL_PC_DIR = args.gt_full_pc_dir
     pl.OP_ORIENT_DIR = args.op_orient_dir
     pl.GT_EDGES_DIR = args.gt_edges_dir
     pl.DEDUP_CSV = args.dedup_csv
@@ -127,6 +133,8 @@ def configure_reward_env(args):
     rf.PRE_CODE_DIR = args.pre_code_dir
     rf.COP_PRE_CODE_DIR = cop_pre
     rf.GT_SINGLE_STEP_DIR = args.gt_single_step_dir
+    rf.GT_SINGLE_PC_DIR = args.gt_single_pc_dir
+    rf.GT_FULL_PC_DIR = args.gt_full_pc_dir
     rf.GT_EDGES_DIR = args.gt_edges_dir
     rf.TMP_DIR = args.tmp_dir
     rf.COP = cop_flag

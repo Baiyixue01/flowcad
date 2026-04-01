@@ -20,6 +20,7 @@ def process_one(args):
     step_path, out_path = args
 
     try:
+        print(f"Processing: {step_path}")
         # STEP → 点云（不做 normalize）
         pts = sample_from_step(step_path, num_points=NUM_POINTS)
 
@@ -88,7 +89,7 @@ def build_gt_pointclouds(
 # 运行入口
 # ======================
 if __name__ == "__main__":
-    GT_STEP_DIR = "/your/gt_step_dir"
-    OUT_DIR = "/your/gt_points_dir"
+    GT_STEP_DIR = "/data/baiyixue/CAD/step_files_sketch"
+    OUT_DIR = "/data/baiyixue/CAD/step_files_pc"
 
     build_gt_pointclouds(GT_STEP_DIR, OUT_DIR)

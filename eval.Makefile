@@ -1032,6 +1032,8 @@ Llama-3.1-8B_full_cop_full:
 		--gt-image-dir /data/baiyixue/CAD/screenshots \
 		--gt-single-step-dir /data/baiyixue/CAD/step_files_sketch \
 		--op-orient-dir /data/baiyixue/CAD/op_oriented_step_sketch \
+		--gt-single-pc-dir /data/baiyixue/CAD/step_files_pc \
+  		--gt-full-pc-dir /data/baiyixue/CAD/op_oriented_step_pc \
 		--dedup-csv /home/baiyixue/project/op-cad/data/dedup.csv \
 		--gt-edges-dir /home/baiyixue/project/op-cad/data/gt_edges_json \
 		--split-json /home/baiyixue/project/op-cad/data/split_result.json \
