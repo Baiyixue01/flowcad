@@ -15,13 +15,13 @@ from pathlib import Path
 import pandas as pd
 
 # ========== 默认路径（可用命令行覆盖） ==========
-SPLIT_JSON = "/home/baiyixue/project/op-cad/data/split_result.json"
-PROMPT_CSV = "/home/baiyixue/project/op-cad/data/prompt.csv"
+SPLIT_JSON = "/home/byx/project/op-cad/data/split_result.json"
+PROMPT_CSV = "/home/byx/project/op-cad/data/prompt.csv"
 PRE_CODE_DIRS = [
-    "/home/baiyixue/project/op-cad/data/pre_code"
+    "/home/byx/project/op-cad/data/pre_code"
 ]
-GT_CODE_DIR  = "/home/baiyixue/project/op-cad/data/gt_code"
-OUT_DIR      = "/home/baiyixue/project/flowcad/dataset/RL_stageI_step_level"
+GT_CODE_DIR  = "/home/byx/project/op-cad/data/gt_code"
+OUT_DIR      = "/home/byx/project/flowcad/dataset/RL_stageI_step_level"
 
 # ========== 工具函数 ==========
 def build_incremental_cq_prompt(

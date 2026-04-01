@@ -1,4 +1,4 @@
-PYTHON := /root/envs/trl/bin/python
+\PYTHON := /data/baiyixue/envs/trl/bin/python
 SCRIPT := /home/baiyixue/project/flowcad/train_stage1_rl.py
 DEEPSPEED := deepspeed
 #记得设置accelerate config,然后就不需要传deepspeed-config
@@ -23,11 +23,10 @@ MAX_INPUT = 12384
 MAX_OUPUT = 1024
 
 # 训练参数
-LR := 1e-6
+LR := 1e-4
 BATCH := 1
-GRAD_ACC := 4
-GEN := 4
-
+GRAD_ACC := 2
+GEN := 2
 
 # =========================
 # 默认目标（本地 reward）
@@ -87,7 +86,6 @@ train-deepspeed:
 	--max-completion-length $(MAX_OUPUT) \
 	--num-generations $(GEN) \
 	--bf16
-
 # =========================
 # 使用远程 reward server
 # =========================

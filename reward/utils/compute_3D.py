@@ -33,7 +33,7 @@ def step_to_stl(step_path: str, stl_path: str) -> None:
     cq.exporters.export(shape, stl_path)
 
 
-def load_mesh_as_points(mesh_path: str, num_points: int = 8192) -> np.ndarray:
+def load_mesh_as_points(mesh_path: str, num_points: int = 2048) -> np.ndarray:
     """读取三角网，并进行表面均匀采样为点云坐标（N, 3）"""
     mesh = trimesh.load(mesh_path, force="mesh")
     if mesh.is_empty:
@@ -43,13 +43,13 @@ def load_mesh_as_points(mesh_path: str, num_points: int = 8192) -> np.ndarray:
     return np.asarray(points, dtype=np.float64)
 
 
-def load_npy_as_points(npy_path: str, num_points: int = 8192) -> np.ndarray:
+def load_npy_as_points(npy_path: str, num_points: int = 2048) -> np.ndarray:
     """读取 .npy 点云，并重采样到固定点数。"""
     pts = np.load(npy_path)
     return _resample_points(pts, num_points)
 
 
-def sample_and_normalize_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
+def sample_and_normalize_from_step(step_path: str, num_points: int = 2048) -> np.ndarray:
     """STEP → STL → 点云，并做中心化+单位球缩放（独立归一化）"""
     with tempfile.TemporaryDirectory() as td:
         stl_path = os.path.join(td, "tmp.stl")
@@ -63,7 +63,7 @@ def sample_and_normalize_from_step(step_path: str, num_points: int = 8192) -> np
         pts = pts / scale
     return pts
 
-def sample_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
+def sample_from_step(step_path: str, num_points: int = 2048) -> np.ndarray:
     """STEP → STL → 点云（不做 normalization）"""
     with tempfile.TemporaryDirectory() as td:
         stl_path = os.path.join(td, "tmp.stl")
@@ -73,7 +73,7 @@ def sample_from_step(step_path: str, num_points: int = 8192) -> np.ndarray:
     return pts
 
 
-def sample_points_from_path(path: str, num_points: int = 8192) -> np.ndarray:
+def sample_points_from_path(path: str, num_points: int = 2048) -> np.ndarray:
     """按文件类型读取点云；支持 STEP/STP/NPY。"""
     ext = os.path.splitext(path)[1].lower()
     if ext in {".step", ".stp"}:
@@ -123,7 +123,7 @@ def hausdorff_distance(points1: np.ndarray, points2: np.ndarray) -> float:
 def compare_step_chamfer_with_rotation_only(
     step_path_1: str,
     step_path_2: str,
-    num_points: int = 8192,
+    num_points: int = 2048,
     angles: list[int] = (0, 90, 180, 270),
     save_vis: bool = False,
     vis_prefix: str = "vis",
@@ -163,7 +163,7 @@ def compare_step_chamfer_with_rotation_only(
 def compare_step_chamfer_no_rotation(
     step_path_1: str,
     step_path_2: str,
-    num_points: int = 8192,
+    num_points: int = 2048,
     angles: list[int] = (0, 90, 180, 270),
     save_vis: bool = False,
     vis_prefix: str = "vis",
@@ -186,7 +186,7 @@ def compare_step_chamfer_no_rotation(
 def compare_step_chamfer_with_icp_rotation(
     step_path_1: str,
     step_path_2: str,
-    num_points: int = 8192,
+    num_points: int = 2048,
     angles: list[int] = (0, 90, 180, 270),
     max_corr: float = 0.01,
     save_vis: bool = False,
@@ -215,7 +215,7 @@ class MetricsResult:
 def get_cd_hd(
     pred_step_path: str,
     gt_step_path: str,
-    num_points: int = 8192,
+    num_points: int = 2048,
     angles: list[int] = (0, 90, 180, 270),
     save_vis: bool = False,
     vis_prefix: str = "vis",

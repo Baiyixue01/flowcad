@@ -9,7 +9,7 @@ NUM_POINTS = 2048
 NPROC = 24
 
 
-def normalize_pointcloud(points: np.ndarray, num_points: int = 8192) -> np.ndarray:
+def normalize_pointcloud(points: np.ndarray, num_points: int = 2048) -> np.ndarray:
     """对现有点云做重采样 + 中心化 + 单位球归一化。"""
     pts = np.asarray(points, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] != 3 or len(pts) == 0:
