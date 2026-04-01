@@ -43,6 +43,94 @@ from trl import GRPOConfig, GRPOTrainer
 import requests
 
 
+GT_SINGLE_PATH_KEYS = (
+    "gt_single_path",
+    "gt_single_pc_path",
+    "gt_single_step_path",
+)
+GT_FULL_PATH_KEYS = (
+    "gt_full_path",
+    "gt_full_pc_path",
+    "gt_full_step_path",
+)
+
+
+def _normalize_optional_path(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value or value.lower() == "nan":
+            return None
+        return value
+    return None
+
+
+def _pick_first_path(example: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        path = _normalize_optional_path(example.get(key))
+        if path:
+            return path
+    return None
+
+
+def _infer_file_kind(path: str | None) -> str:
+    if not path:
+        return "missing"
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".npy":
+        return "pointcloud"
+    if ext in {".step", ".stp"}:
+        return "step"
+    return ext.lstrip(".") or "unknown"
+
+
+def enrich_dataset_with_gt_paths(dataset, dataset_name: str):
+    """
+    为 reward 显式补齐 GT 文件路径。
+    优先复用 JSONL 中已有路径列；若缺失则根据 group_index + 全局目录解析。
+    """
+
+    stats = {
+        "single_pointcloud": 0,
+        "single_step": 0,
+        "single_missing": 0,
+        "full_pointcloud": 0,
+        "full_step": 0,
+        "full_missing": 0,
+    }
+
+    def _add_gt_paths(example: dict[str, Any]) -> dict[str, Any]:
+        gt_single_path = _pick_first_path(example, GT_SINGLE_PATH_KEYS)
+        gt_full_path = _pick_first_path(example, GT_FULL_PATH_KEYS)
+
+        if (not gt_single_path or not gt_full_path) and example.get("group_index"):
+            resolved_single, resolved_full = pl.resolve_gt_paths(str(example["group_index"]).strip(), pl.GT_SINGLE_STEP_DIR)
+            gt_single_path = gt_single_path or resolved_single
+            gt_full_path = gt_full_path or resolved_full
+
+        single_kind = _infer_file_kind(gt_single_path)
+        full_kind = _infer_file_kind(gt_full_path)
+
+        stats[f"single_{single_kind}" if f"single_{single_kind}" in stats else "single_missing"] += 1
+        stats[f"full_{full_kind}" if f"full_{full_kind}" in stats else "full_missing"] += 1
+
+        return {
+            "gt_single_path": gt_single_path or "",
+            "gt_full_path": gt_full_path or "",
+            "gt_single_kind": single_kind,
+            "gt_full_kind": full_kind,
+        }
+
+    dataset = dataset.map(_add_gt_paths, desc=f"resolve_gt_paths[{dataset_name}]")
+    print(
+        f"[{dataset_name}] GT sources: "
+        f"single(pointcloud={stats['single_pointcloud']}, step={stats['single_step']}, missing={stats['single_missing']}), "
+        f"full(pointcloud={stats['full_pointcloud']}, step={stats['full_step']}, missing={stats['full_missing']})"
+    )
+    return dataset
+
+
 
 
 def parse_args():
@@ -198,9 +286,11 @@ def main():
     configure_reward_env(args)
 
     train_ds = load_dataset("json", data_files=args.train_jsonl, split="train")
+    train_ds = enrich_dataset_with_gt_paths(train_ds, "train")
     eval_ds = None
     if args.eval_jsonl:
         eval_ds = load_dataset("json", data_files=args.eval_jsonl, split="train")
+        eval_ds = enrich_dataset_with_gt_paths(eval_ds, "eval")
 
     # model = AutoModelForCausalLM.from_pretrained(
     #     args.model_name,

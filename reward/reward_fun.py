@@ -17,6 +17,20 @@ from reward.utils.post_code_process import build_iso_code, build_integrated_code
 
 _PID_RE = re.compile(r"^\s*#\s*PID\s*:\s*(.+?)\s*$", re.IGNORECASE | re.M)
 _OP_RE  = re.compile(r"^\s*#\s*OP\s*:\s*(.+?)\s*$",  re.IGNORECASE | re.M)
+_GT_SINGLE_KEYS = (
+    "gt_single_path",
+    "gt_single_pc_path",
+    "gt_single_step_path",
+)
+_GT_FULL_KEYS = (
+    "gt_full_path",
+    "gt_full_pc_path",
+    "gt_full_step_path",
+)
+_PREV_CODE_KEYS = (
+    "previous_code",
+    "prev_code",
+)
 
 def _extract_pid_op(prompt: str):
     m1 = _PID_RE.search(prompt or "")
@@ -77,6 +91,41 @@ def _build_unique_workdir(tmp_dir: str, pid: str, sample_idx: int) -> str:
     base = os.path.join(tmp_dir, "grpo_reward", pid_part)
     os.makedirs(base, exist_ok=True)
     return tempfile.mkdtemp(prefix=f"r{rank}_i{sample_idx:03d}_", dir=base)
+
+
+def _normalize_optional_path(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value or value.lower() == "nan":
+            return None
+        return value
+    return None
+
+
+def _get_first_valid_value(meta: dict, keys):
+    for key in keys:
+        value = meta.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+        elif value is not None:
+            return value
+    return None
+
+
+def _resolve_gt_paths_for_sample(meta: dict, pid: str):
+    gt_single = _normalize_optional_path(_get_first_valid_value(meta, _GT_SINGLE_KEYS))
+    gt_full = _normalize_optional_path(_get_first_valid_value(meta, _GT_FULL_KEYS))
+
+    if (not gt_single or not gt_full) and pid:
+        resolved_single, resolved_full = resolve_gt_paths(pid, GT_SINGLE_STEP_DIR)
+        gt_single = gt_single or resolved_single
+        gt_full = gt_full or resolved_full
+
+    return gt_single, gt_full
 
 def _format_ok(gen_code: str, op_kind: str = "") -> bool:
     """
@@ -175,6 +224,11 @@ def reward_fn(prompts, completions, **kwargs):
     ops = _to_list(kwargs.get("op"))
 
     for i, (prompt, completion) in enumerate(zip(prompts, completions)):
+        sample_meta = {
+            key: _get_by_idx(_to_list(val), i) if isinstance(val, (list, tuple, np.ndarray)) or hasattr(val, "tolist") else val
+            for key, val in kwargs.items()
+        }
+
         # 优先用数据列，避免从 prompt 正则解析
         pid = _get_by_idx(group_indices, i)
         op_kind = _get_by_idx(ops, i)
@@ -183,6 +237,10 @@ def reward_fn(prompts, completions, **kwargs):
             pid = str(pid).strip()
         if op_kind is not None:
             op_kind = str(op_kind).strip().lower()
+        if not pid or op_kind is None:
+            prompt_pid, prompt_op = _extract_pid_op(prompt if isinstance(prompt, str) else "")
+            pid = pid or prompt_pid
+            op_kind = op_kind or prompt_op
 
         gen_code = _extract_code_block(completion)
 
@@ -191,16 +249,22 @@ def reward_fn(prompts, completions, **kwargs):
             rewards.append(-2.0)
             continue
 
+        if not pid:
+            rewards.append(-2.0)
+            continue
+
         # step0 判断
         m = re.search(r"step(\d+)", pid)
         step_num = int(m.group(1)) if m else -1
         first_step = (step_num == 0)
 
-        # GT 路径（你现有逻辑：single + full）
-        gt_single_step, gt_full_step = resolve_gt_paths(pid, GT_SINGLE_STEP_DIR)
+        # GT 路径：优先使用样本显式传入的点云/STEP 文件，其次回退目录解析
+        gt_single_step, gt_full_step = _resolve_gt_paths_for_sample(sample_meta, pid)
 
-        # 前序代码（训练里通常你会把 prev_code 嵌进 prompt，但这里直接按你的目录读也行）
-        prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)
+        # 前序代码：优先使用样本直传，避免训练时再读磁盘旧版本
+        prev_code = _get_first_valid_value(sample_meta, _PREV_CODE_KEYS)
+        if prev_code is None:
+            prev_code = _load_prev_code_from_dir(pid, COP_PRE_CODE_DIR if COP else PRE_CODE_DIR)
 
         # 为本条样本创建临时工作目录（避免不同样本互相覆盖）
         workdir = _build_unique_workdir(TMP_DIR, pid, i)
