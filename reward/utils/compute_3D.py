@@ -80,6 +80,7 @@ def sample_points_from_path(path: str, num_points: int = 2048) -> np.ndarray:
         return sample_and_normalize_from_step(path, num_points=num_points)
         # return sample_from_step(path, num_points=num_points)
     if ext == ".npy":
+        print(f"读取点云：{path}")
         return load_npy_as_points(path, num_points=num_points)
     raise RuntimeError(f"Unsupported 3D input format: {path}")
 
@@ -221,7 +222,7 @@ def get_cd_hd(
     vis_prefix: str = "vis",
 ):
     """计算 CD/HD，去除 open3d 依赖，默认禁用可视化。"""
-    cd, hd, best_angles = compare_step_chamfer_with_rotation_only(
+    cd, hd, best_angles = compare_step_chamfer_no_rotation(
         step_path_1=pred_step_path,
         step_path_2=gt_step_path,
         num_points=num_points,
@@ -240,9 +241,9 @@ if __name__ == "__main__":
 
     # 开始前内存
     mem_before = process.memory_info().rss / 1024**2  # MB
-    STEP_A = "/data/baiyixue/CAD/op_oriented_step_sketch/02815_index_14/13_14_15_16/next_model.step"
-    # STEP_B = "/data/baiyixue/CAD/op_oriented_step_pc_normalized/02815_index_14/13_14_15_16/next_model.npy"
-    STEP_B = "/data/baiyixue/CAD/op_oriented_step_sketch/02815_index_14/13_14_15_16/next_model.step"
+    STEP_A = "/data/baiyixue/CAD/op_oriented_step/02815_index_14/13_14_15_16/next_model.step"
+    STEP_B = "/data/baiyixue/CAD/op_oriented_step_pc_normalized/02815_index_14/13_14_15_16/next_model.npy"
+    # STEP_B = "/data/baiyixue/CAD/op_oriented_step/02815_index_14/13_14_15_16/next_model.step"
 
     NUM_POINTS = 2048
     ANGLES = [0, 90, 180, 270]

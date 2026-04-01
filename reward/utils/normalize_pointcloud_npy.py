@@ -70,7 +70,7 @@ def build_normalized_npy_tree(in_root_dir: str, out_root_dir: str):
 
 
 if __name__ == "__main__":
-    IN_ROOT_DIR = "/data/baiyixue/CAD/step_files_pc_2048"
-    OUT_ROOT_DIR = "/data/baiyixue/CAD/step_files_pc_2048_normalized"
+    IN_ROOT_DIR = "/data/baiyixue/CAD/op_oriented_step_pc"
+    OUT_ROOT_DIR = "/data/baiyixue/CAD/op_oriented_step_pc_normalized"
 
     build_normalized_npy_tree(IN_ROOT_DIR, OUT_ROOT_DIR)

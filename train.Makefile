@@ -1,4 +1,4 @@
-PYTHON := /root/envs/trl/bin/python
+ePYTHON := /data/baiyixue/envs/trl/bin/python
 SCRIPT := /home/baiyixue/project/flowcad/train_stage1_rl.py
 DEEPSPEED := deepspeed
 #记得设置accelerate config,然后就不需要传deepspeed-config
@@ -14,6 +14,7 @@ PRE_CODE_DIR := data/pre_code
 GT_SINGLE_STEP_DIR := /data/baiyixue/CAD/step_files
 OP_ORIENT_DIR := /data/baiyixue/CAD/op_oriented_step
 GT_EDGES_DIR := data/gt_edges_json
+
 TMP_DIR := /home/baiyixue/project/flowcad/tmp_reward
 DEDUP_CSV := data/dedup.csv
 DS_CONFIG := configs/deepspeed/stage1_zero2.json
@@ -25,8 +26,8 @@ MAX_OUPUT = 1024
 # 训练参数
 LR := 1e-6
 BATCH := 1
-GRAD_ACC := 4
-GEN := 4
+GRAD_ACC := 2
+GEN := 2
 
 
 # =========================

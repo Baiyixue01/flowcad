@@ -8,3 +8,5 @@ trl*
 *step
 logs
 *sh
+train.Makefile
+*config*
