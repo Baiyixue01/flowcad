@@ -244,7 +244,7 @@ if __name__ == "__main__":
     # STEP_B = "/data/baiyixue/CAD/op_oriented_step_pc_normalized/02815_index_14/13_14_15_16/next_model.npy"
     STEP_B = "/data/baiyixue/CAD/op_oriented_step_sketch/02815_index_14/13_14_15_16/next_model.step"
 
-    NUM_POINTS = 8192
+    NUM_POINTS = 2048
     ANGLES = [0, 90, 180, 270]
 
     t0 = time.time()

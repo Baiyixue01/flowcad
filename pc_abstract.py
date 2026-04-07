@@ -2,7 +2,8 @@ import os
 import numpy as np
 import multiprocessing as mp
 from tqdm import tqdm
-import traceback
+import time
+import signal
 
 # 复用你现有函数（来自 compute_3D.py）
 from reward.utils.compute_3D import sample_from_step  # :contentReference[oaicite:1]{index=1}
@@ -10,8 +11,17 @@ from reward.utils.compute_3D import sample_from_step  # :contentReference[oaicit
 # ======================
 # 配置
 # ======================
-NUM_POINTS = 8192   # ⚠️ 和你原来完全一致
+NUM_POINTS = 2048   # ⚠️ 和你原来完全一致
 NPROC = 24          # 根据CPU调整
+TIMEOUT_SECONDS = 180
+
+
+class SampleTimeoutError(TimeoutError):
+    pass
+
+
+def _handle_timeout(signum, frame):
+    raise SampleTimeoutError(f"sampling exceeded {TIMEOUT_SECONDS}s")
 
 # ======================
 # 单个文件处理
@@ -21,16 +31,29 @@ def process_one(args):
 
     try:
         print(f"Processing: {step_path}")
+        start_time = time.time()
+
+        # 给单个样本的抽点过程设置硬超时，超过 3 分钟直接跳过。
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(TIMEOUT_SECONDS)
+
         # STEP → 点云（不做 normalize）
         pts = sample_from_step(step_path, num_points=NUM_POINTS)
+        elapsed = time.time() - start_time
+        signal.alarm(0)
 
         # 保存 float32（节省一半空间）
         np.save(out_path, pts.astype(np.float32))
 
-        return True, step_path
+        return "success", f"{step_path} | {elapsed:.2f}s"
+
+    except SampleTimeoutError:
+        signal.alarm(0)
+        return "timeout", step_path
 
     except Exception as e:
-        return False, f"{step_path} | {e}"
+        signal.alarm(0)
+        return "error", f"{step_path} | {e}"
 
 
 # ======================
@@ -70,26 +93,50 @@ def build_gt_pointclouds(
 
     print(f"[INFO] Total STEP files: {len(tasks)}")
 
+    timeout_log_path = os.path.join(out_root_dir, "skipped_timeout_samples.txt")
+    error_log_path = os.path.join(out_root_dir, "failed_samples.txt")
+
     # -------- 多进程处理 --------
     success = 0
     fail = 0
+    timeout = 0
+
+    timeout_records = []
+    error_records = []
 
     with mp.Pool(NPROC) as pool:
-        for ok, msg in tqdm(pool.imap_unordered(process_one, tasks), total=len(tasks)):
-            if ok:
+        for status, msg in tqdm(pool.imap_unordered(process_one, tasks), total=len(tasks)):
+            if status == "success":
                 success += 1
+            elif status == "timeout":
+                timeout += 1
+                timeout_records.append(msg)
+                print("[TIMEOUT]", msg)
             else:
                 fail += 1
+                error_records.append(msg)
                 print("[ERROR]", msg)
 
-    print(f"\nDone: {success} success, {fail} failed")
+    if timeout_records:
+        with open(timeout_log_path, "w", encoding="utf-8") as f:
+            for item in timeout_records:
+                f.write(item + "\n")
+
+    if error_records:
+        with open(error_log_path, "w", encoding="utf-8") as f:
+            for item in error_records:
+                f.write(item + "\n")
+
+    print(f"\nDone: {success} success, {timeout} timeout-skipped, {fail} failed")
+    print(f"[INFO] Timeout log: {timeout_log_path}")
+    print(f"[INFO] Error log: {error_log_path}")
 
 
 # ======================
 # 运行入口
 # ======================
 if __name__ == "__main__":
-    GT_STEP_DIR = "/data/baiyixue/CAD/step_files_sketch"
-    OUT_DIR = "/data/baiyixue/CAD/step_files_pc"
+    GT_STEP_DIR = "/data/baiyixue/CAD/op_oriented_step_sketch"
+    OUT_DIR = "/data/baiyixue/CAD/op_oriented_step_pc_2048"
 
     build_gt_pointclouds(GT_STEP_DIR, OUT_DIR)
