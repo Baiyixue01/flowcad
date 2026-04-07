@@ -29,6 +29,11 @@ BATCH := 1
 GRAD_ACC := 2
 GEN := 2
 
+# 分布式/NCCL 超时与容错
+TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC := 3600
+NCCL_IB_TIMEOUT := 30
+NCCL_SOCKET_RETRY_CNT := 120
+
 
 # =========================
 # 默认目标（本地 reward）
@@ -36,6 +41,11 @@ GEN := 2
 train:
 	NCCL_P2P_DISABLE=1 \
 	NCCL_SHM_DISABLE=1 \
+	NCCL_ASYNC_ERROR_HANDLING=1 \
+	TORCH_NCCL_BLOCKING_WAIT=1 \
+	TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=$(TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC) \
+	NCCL_IB_TIMEOUT=$(NCCL_IB_TIMEOUT) \
+	NCCL_SOCKET_RETRY_CNT=$(NCCL_SOCKET_RETRY_CNT) \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 	torchrun --standalone --nproc_per_node=8 \
 	$(SCRIPT) \
@@ -46,8 +56,8 @@ train:
 	--pre-code-dir $(PRE_CODE_DIR) \
 	--gt-single-step-dir $(GT_SINGLE_STEP_DIR) \
 	--op-orient-dir $(OP_ORIENT_DIR) \
-	--gt-single-pc-dir /data/baiyixue/CAD/step_files_pc \
-	--gt-full-pc-dir /data/baiyixue/CAD/op_oriented_step_pc \
+	--gt-single-pc-dir /data/baiyixue/CAD/step_files_pc_2048_normalized \
+	--gt-full-pc-dir /data/baiyixue/CAD/op_oriented_step_pc_2048_normalized \
 	--gt-edges-dir $(GT_EDGES_DIR) \
 	--dedup-csv $(DEDUP_CSV) \
 	--tmp-dir $(TMP_DIR) \
@@ -65,6 +75,11 @@ train:
 train-deepspeed:
 	NCCL_P2P_DISABLE=1 \
 	NCCL_SHM_DISABLE=1 \
+	NCCL_ASYNC_ERROR_HANDLING=1 \
+	TORCH_NCCL_BLOCKING_WAIT=1 \
+	TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=$(TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC) \
+	NCCL_IB_TIMEOUT=$(NCCL_IB_TIMEOUT) \
+	NCCL_SOCKET_RETRY_CNT=$(NCCL_SOCKET_RETRY_CNT) \
 	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 	accelerate launch \
 	--mixed_precision bf16 \
