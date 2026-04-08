@@ -24,7 +24,7 @@ MAX_INPUT = 12384
 MAX_OUPUT = 1024
 
 # 训练参数
-LR := 1e-6
+LR := 1e-4
 BATCH := 1
 GRAD_ACC := 2
 GEN := 2
@@ -91,8 +91,8 @@ train-deepspeed:
 	--pre-code-dir $(PRE_CODE_DIR) \
 	--gt-single-step-dir $(GT_SINGLE_STEP_DIR) \
 	--op-orient-dir $(OP_ORIENT_DIR) \
-	--gt-single-pc-dir /data/baiyixue/CAD/step_files_pc \
-	--gt-full-pc-dir /data/baiyixue/CAD/op_oriented_step_pc \
+	--gt-single-pc-dir /data/baiyixue/CAD/step_files_pc_2048_normalized \
+	--gt-full-pc-dir /data/baiyixue/CAD/op_oriented_step_pc_2048_normalized \
 	--gt-edges-dir $(GT_EDGES_DIR) \
 	--dedup-csv $(DEDUP_CSV) \
 	--tmp-dir $(TMP_DIR) \
