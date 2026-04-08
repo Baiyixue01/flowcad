@@ -86,6 +86,7 @@ train-deepspeed:
 	$(SCRIPT) \
 	--train-jsonl $(TRAIN_JSONL) \
 	--eval-jsonl $(EVAL_JSONL) \
+	--reward-skip-single \
 	--model-name $(MODEL) \
 	--output-dir $(OUTPUT_DIR)_ds \
 	--pre-code-dir $(PRE_CODE_DIR) \
