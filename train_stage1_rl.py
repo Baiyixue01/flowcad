@@ -360,6 +360,7 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing,
         deepspeed=deepspeed_config,
         report_to="none",
+        ddp_find_unused_parameters=False,
         # use_vllm=True,
         # vllm_mode="server",
         # vllm_server_base_url="http://127.0.0.1:8001",
