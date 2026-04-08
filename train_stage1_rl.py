@@ -170,6 +170,18 @@ def parse_args():
         default=2,
         help="远程 reward 请求最大重试次数（失败后返回惩罚分）。",
     )
+    parser.add_argument(
+        "--reward-num-points",
+        type=int,
+        default=2048,
+        help="reward 里 CD/HD 采样点数。越小越快，但几何指标更粗。",
+    )
+    parser.add_argument(
+        "--reward-skip-single",
+        action="store_true",
+        default=False,
+        help="reward 只验证 full，跳过 single 的建模执行和 CD/HD 计算，以换取训练速度。",
+    )
 
     # 训练超参
     parser.add_argument("--seed", type=int, default=42)
@@ -226,6 +238,8 @@ def configure_reward_env(args):
     rf.GT_EDGES_DIR = args.gt_edges_dir
     rf.TMP_DIR = args.tmp_dir
     rf.COP = cop_flag
+    rf.REWARD_NUM_POINTS = args.reward_num_points
+    rf.REWARD_SKIP_SINGLE = bool(args.reward_skip_single)
 
     os.makedirs(args.tmp_dir, exist_ok=True)
 

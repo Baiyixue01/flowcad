@@ -1,7 +1,7 @@
 # ---- 新增：多进程所需 ----
 import multiprocessing as mp
 from functools import partial
-import os, traceback, json, time
+import os, traceback, json, time, sys, subprocess, signal
 import pandas as pd
 import numpy as np
 import cadquery as cq
@@ -921,12 +921,146 @@ def _eval_pred_edges_from_blocks(prev_code: str, gen_code: str):
     return fillet_pred, chamfer_pred, ""
 
 # ===================== 执行/几何有效性 =====================
+_SUBPROCESS_JSON_MARKER = "__FLOWCAD_JSON__="
+_SAFE_EXEC_TIMEOUT_SEC = 120
+_SAFE_METRIC_TIMEOUT_SEC = 180
+
+
+def _format_subprocess_failure(returncode: int, stderr: str = "") -> str:
+    if returncode < 0:
+        sig_num = -returncode
+        try:
+            sig_name = signal.Signals(sig_num).name
+        except Exception:
+            sig_name = f"SIG{sig_num}"
+        return f"subprocess_terminated_by_signal:{sig_name}"
+    detail = f"subprocess_exit_code:{returncode}"
+    stderr = (stderr or "").strip()
+    if stderr:
+        detail += f"; stderr={stderr}"
+    return detail
+
+
+def _extract_subprocess_json(stdout: str):
+    for line in reversed((stdout or "").splitlines()):
+        if line.startswith(_SUBPROCESS_JSON_MARKER):
+            payload = line[len(_SUBPROCESS_JSON_MARKER):]
+            return json.loads(payload)
+    raise ValueError("missing subprocess json payload")
+
+
+def _run_isolated_python(payload: dict, timeout: int):
+    runner = r"""
+import json
+import sys
+import traceback
+
+MARKER = "__FLOWCAD_JSON__="
+
+def emit(obj):
+    print(MARKER + json.dumps(obj, ensure_ascii=False))
+
+def run_exec(data):
+    import cadquery as cq
+    import numpy as np
+
+    py_path = data["py_path"]
+    glb = {"cq": cq, "np": np}
+    with open(py_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    exec(compile(src, py_path, "exec"), glb, glb)
+    emit({"ok": True, "err": ""})
+
+def run_metric(data):
+    from reward.utils.compute_3D import get_cd_hd
+
+    kwargs = {
+        "pred_step_path": data["pred_step_path"],
+        "gt_step_path": data["gt_step_path"],
+    }
+    if data.get("num_points") is not None:
+        kwargs["num_points"] = data["num_points"]
+    if data.get("angles") is not None:
+        kwargs["angles"] = data["angles"]
+
+    res = get_cd_hd(**kwargs)
+    emit(
+        {
+            "ok": bool(getattr(res, "ok", False)),
+            "reason": getattr(res, "reason", ""),
+            "cd": getattr(res, "cd", None),
+            "hd": getattr(res, "hd", None),
+            "best_euler_angle": getattr(res, "best_euler_angle", None),
+        }
+    )
+
+def main():
+    try:
+        payload = json.loads(sys.argv[1])
+        mode = payload["mode"]
+        if mode == "exec":
+            run_exec(payload)
+        elif mode == "metric":
+            run_metric(payload)
+        else:
+            emit({"ok": False, "err": f"unknown_mode:{mode}"})
+            sys.exit(2)
+    except Exception as exc:
+        emit(
+            {
+                "ok": False,
+                "err": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+        )
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+"""
+    return subprocess.run(
+        [sys.executable, "-c", runner, json.dumps(payload, ensure_ascii=False)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=os.getcwd(),
+    )
+
+
 def safe_exec_from_path(py_path: str, globals_dict=None):
     """执行保存到磁盘的 Python/CadQuery 脚本；返回 (ok, locals, err)。"""
     glb = {"cq": cq, "np": np}
     if globals_dict:
         glb.update(globals_dict)
     loc = {}
+    if globals_dict is None:
+        try:
+            proc = _run_isolated_python({"mode": "exec", "py_path": py_path}, timeout=_SAFE_EXEC_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            return False, {}, f"TimeoutExpired: execution exceeded {_SAFE_EXEC_TIMEOUT_SEC}s"
+        except Exception as e:
+            return False, {}, f"isolation_error:{type(e).__name__}: {e}"
+
+        if proc.returncode == 0:
+            try:
+                payload = _extract_subprocess_json(proc.stdout)
+                return bool(payload.get("ok", False)), {}, payload.get("err", "")
+            except Exception as e:
+                err = _format_subprocess_failure(proc.returncode, proc.stderr)
+                return False, {}, f"bad_subprocess_output:{type(e).__name__}: {e}; {err}"
+
+        try:
+            payload = _extract_subprocess_json(proc.stdout)
+            err = payload.get("err", "")
+            tb = payload.get("traceback", "")
+            detail = _format_subprocess_failure(proc.returncode, proc.stderr)
+            msg = err or detail
+            if tb:
+                msg = f"{msg}\n{tb}"
+            return False, {}, msg
+        except Exception:
+            return False, {}, _format_subprocess_failure(proc.returncode, proc.stderr)
+
     try:
         with open(py_path, "r", encoding="utf-8") as f:
             src = f.read()
@@ -1016,17 +1150,47 @@ def _compute_summary(rows: List[dict], pid: str, op_kind: str) -> dict:
 
 def _safe_get_cd_hd(pred_step_path, gt_step_path, *, num_points=None, angles=None):
     """包装 get_cd_hd，GT 可为 STEP 或 NPY；任何异常都转成 MetricsResult。"""
-    from reward.utils.compute_3D import get_cd_hd, MetricsResult
+    from reward.utils.compute_3D import MetricsResult
     try:
-        if angles is None:
-            if num_points is None:
-                return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path)
-            return get_cd_hd(pred_step_path=pred_step_path, gt_step_path=gt_step_path, num_points=num_points)
-        else:
-            kwargs = {"pred_step_path": pred_step_path, "gt_step_path": gt_step_path, "angles": angles}
-            if num_points is not None:
-                kwargs["num_points"] = num_points
-            return get_cd_hd(**kwargs)
+        payload = {
+            "mode": "metric",
+            "pred_step_path": pred_step_path,
+            "gt_step_path": gt_step_path,
+            "num_points": num_points,
+            "angles": angles,
+        }
+        proc = _run_isolated_python(payload, timeout=_SAFE_METRIC_TIMEOUT_SEC)
+        if proc.returncode != 0:
+            return MetricsResult(
+                None,
+                None,
+                None,
+                ok=False,
+                reason=_format_subprocess_failure(proc.returncode, proc.stderr),
+            )
+
+        data = _extract_subprocess_json(proc.stdout)
+        if not data.get("ok", False):
+            return MetricsResult(
+                None,
+                None,
+                None,
+                ok=False,
+                reason=data.get("reason") or data.get("err", "metric_failed"),
+            )
+
+        best_angles = data.get("best_euler_angle")
+        if isinstance(best_angles, list):
+            best_angles = tuple(best_angles)
+        return MetricsResult(
+            data.get("cd"),
+            data.get("hd"),
+            best_angles,
+            ok=True,
+            reason=data.get("reason", ""),
+        )
+    except subprocess.TimeoutExpired:
+        return MetricsResult(None, None, None, ok=False, reason=f"metric_timeout:{_SAFE_METRIC_TIMEOUT_SEC}s")
     except Exception as e:
         reason = f"metric_exception:{type(e).__name__}:{e}"
         return MetricsResult(None, None, None, ok=False, reason=reason)

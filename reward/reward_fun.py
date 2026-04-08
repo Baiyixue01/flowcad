@@ -32,6 +32,9 @@ _PREV_CODE_KEYS = (
     "prev_code",
 )
 
+REWARD_NUM_POINTS = 2048
+REWARD_SKIP_SINGLE = False
+
 def _extract_pid_op(prompt: str):
     m1 = _PID_RE.search(prompt or "")
     m2 = _OP_RE.search(prompt or "")
@@ -268,10 +271,10 @@ def reward_fn(prompts, completions, **kwargs):
 
         # 为本条样本创建临时工作目录（避免不同样本互相覆盖）
         workdir = _build_unique_workdir(TMP_DIR, pid, i)
-        single_step_path = os.path.join(workdir, "pred_single.step")
         full_step_path   = os.path.join(workdir, "pred_full.step")
-        single_py        = os.path.join(workdir, "pred_single.py")
         full_py          = os.path.join(workdir, "pred_full.py")
+        single_step_path = os.path.join(workdir, "pred_single.step")
+        single_py        = os.path.join(workdir, "pred_single.py")
 
         # ---------- 分支：Chamfer/Fillet ----------
         if op_kind == "chamfer_fillet":
@@ -305,21 +308,25 @@ def reward_fn(prompts, completions, **kwargs):
         # ---------- 普通几何操作：single + full ----------
         # 1) 生成 single/full 代码并落盘
         try:
-            single_code, info_shape = build_iso_code(prev_code, gen_code, single_step_path, first_step=first_step)
             integrated_code, _ = build_integrated_code(prev_code, gen_code, full_step_path, first_step=first_step)
-            with open(single_py, "w", encoding="utf-8") as f:
-                f.write(single_code)
             with open(full_py, "w", encoding="utf-8") as f:
                 f.write(integrated_code)
+            if not REWARD_SKIP_SINGLE:
+                single_code, info_shape = build_iso_code(prev_code, gen_code, single_step_path, first_step=first_step)
+                with open(single_py, "w", encoding="utf-8") as f:
+                    f.write(single_code)
         except Exception:
             rewards.append(-2.0)
             continue
 
         # 2) 执行
-        ok_single, _, err_single = safe_exec_from_path(single_py)
+        ok_single = False
+        err_single = ""
+        if not REWARD_SKIP_SINGLE:
+            ok_single, _, err_single = safe_exec_from_path(single_py)
         ok_full,   _, err_full   = safe_exec_from_path(full_py)
 
-        pred_single_exists = ok_single and os.path.exists(single_step_path)
+        pred_single_exists = (not REWARD_SKIP_SINGLE) and ok_single and os.path.exists(single_step_path)
         pred_full_exists   = ok_full   and os.path.exists(full_step_path)
 
         # ---------- 门控：至少 full 或 single 有一个成功 ----------
@@ -330,7 +337,11 @@ def reward_fn(prompts, completions, **kwargs):
         # 3) 指标：single 对 gt_single；full 对 gt_full（与你评测一致）
         # single
         if pred_single_exists and gt_single_step:
-            res_s = _safe_get_cd_hd(pred_step_path=single_step_path, gt_step_path=gt_single_step)
+            res_s = _safe_get_cd_hd(
+                pred_step_path=single_step_path,
+                gt_step_path=gt_single_step,
+                num_points=REWARD_NUM_POINTS,
+            )
         else:
             res_s = None
 
@@ -339,7 +350,12 @@ def reward_fn(prompts, completions, **kwargs):
             if first_step and res_s is not None and getattr(res_s, "ok", False):
                 res_f = res_s
             else:
-                res_f = _safe_get_cd_hd(pred_step_path=full_step_path, gt_step_path=gt_full_step, angles=[0])
+                res_f = _safe_get_cd_hd(
+                    pred_step_path=full_step_path,
+                    gt_step_path=gt_full_step,
+                    angles=[0],
+                    num_points=REWARD_NUM_POINTS,
+                )
         else:
             res_f = None
 
